@@ -1,0 +1,316 @@
+using Microsoft.Data.Sqlite;
+
+namespace NetworkMonitor.Storage;
+
+internal sealed class TrafficStore : IDisposable
+{
+    private readonly SqliteConnection _connection;
+
+    public TrafficStore(string databasePath)
+    {
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(databasePath)) ?? ".");
+        var cs = new SqliteConnectionStringBuilder
+        {
+            DataSource = databasePath,
+            Mode = SqliteOpenMode.ReadWriteCreate,
+            Cache = SqliteCacheMode.Shared,
+        }.ToString();
+
+        _connection = new SqliteConnection(cs);
+        _connection.Open();
+        InitSchema();
+    }
+
+    private void InitSchema()
+    {
+        var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            CREATE TABLE IF NOT EXISTS usage (
+              minute_utc TEXT NOT NULL,
+              app_name TEXT NOT NULL,
+              nic_name TEXT NOT NULL,
+              remote_ip TEXT NOT NULL,
+              remote_port INTEGER NOT NULL,
+              host_name TEXT NOT NULL,
+              bytes_sent INTEGER NOT NULL DEFAULT 0,
+              bytes_received INTEGER NOT NULL DEFAULT 0,
+              PRIMARY KEY (minute_utc, app_name, nic_name, remote_ip, remote_port)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_usage_minute ON usage(minute_utc);
+            CREATE INDEX IF NOT EXISTS idx_usage_app ON usage(app_name);
+            CREATE INDEX IF NOT EXISTS idx_usage_remote_ip ON usage(remote_ip);
+
+            CREATE TABLE IF NOT EXISTS meta (
+              key TEXT PRIMARY KEY,
+              value TEXT NOT NULL
+            );
+            """;
+        cmd.ExecuteNonQuery();
+    }
+
+    public void ApplyDeltas(IReadOnlyList<TrafficDelta> deltas)
+    {
+        if (deltas.Count == 0)
+            return;
+
+        var now = DateTime.UtcNow;
+        var minuteUtc = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0, DateTimeKind.Utc).ToString("yyyy-MM-ddTHH:mm:00Z");
+        
+        using var tx = _connection.BeginTransaction();
+        foreach (var d in deltas)
+        {
+            using var cmd = _connection.CreateCommand();
+            cmd.Transaction = tx;
+            cmd.CommandText = """
+                INSERT INTO usage (minute_utc, app_name, nic_name, remote_ip, remote_port, host_name, bytes_sent, bytes_received)
+                VALUES ($min, $app, $nic, $rip, $rport, $host, $up, $down)
+                ON CONFLICT(minute_utc, app_name, nic_name, remote_ip, remote_port) DO UPDATE SET
+                  bytes_sent = bytes_sent + excluded.bytes_sent,
+                  bytes_received = bytes_received + excluded.bytes_received,
+                  host_name = excluded.host_name;
+                """;
+            cmd.Parameters.AddWithValue("$min", minuteUtc);
+            cmd.Parameters.AddWithValue("$app", d.AppName);
+            cmd.Parameters.AddWithValue("$nic", d.NicName);
+            cmd.Parameters.AddWithValue("$rip", d.RemoteIp);
+            cmd.Parameters.AddWithValue("$rport", d.RemotePort);
+            cmd.Parameters.AddWithValue("$host", d.HostName);
+            cmd.Parameters.AddWithValue("$up", d.DeltaSent);
+            cmd.Parameters.AddWithValue("$down", d.DeltaReceived);
+            cmd.ExecuteNonQuery();
+        }
+
+        tx.Commit();
+    }
+
+    public UsageTotalsRow UsageTotalsInRangeUtc(string fromUtcInclusive, string toUtcInclusive, string? appNameOrAll)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT COALESCE(SUM(bytes_sent), 0), COALESCE(SUM(bytes_received), 0)
+            FROM usage
+            WHERE minute_utc >= $from AND minute_utc <= $to
+            """ + AppFilterClause(appNameOrAll, "AND ");
+        AddRangeParams(cmd, fromUtcInclusive, toUtcInclusive, appNameOrAll);
+        using var r = cmd.ExecuteReader();
+        r.Read();
+        return new UsageTotalsRow(r.GetInt64(0), r.GetInt64(1));
+    }
+
+    public IReadOnlyList<AppUsageRow> UsageByAppInRangeUtc(string fromUtcInclusive, string toUtcInclusive, string? appNameOrAll)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT app_name,
+                   COALESCE(SUM(bytes_sent), 0) AS up,
+                   COALESCE(SUM(bytes_received), 0) AS down
+            FROM usage
+            WHERE minute_utc >= $from AND minute_utc <= $to
+            """ + AppFilterClause(appNameOrAll, "AND ") + """
+            GROUP BY app_name
+            ORDER BY (up + down) DESC;
+            """;
+        AddRangeParams(cmd, fromUtcInclusive, toUtcInclusive, appNameOrAll);
+        return ReadAppUsageRows(cmd);
+    }
+
+    public IReadOnlyList<IpUsageRow> UsageByIpInRangeUtc(string fromUtcInclusive, string toUtcInclusive, string? appNameOrAll)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT remote_ip,
+                   COALESCE(SUM(bytes_sent), 0) AS up,
+                   COALESCE(SUM(bytes_received), 0) AS down
+            FROM usage
+            WHERE minute_utc >= $from AND minute_utc <= $to
+            """ + AppFilterClause(appNameOrAll, "AND ") + """
+            GROUP BY remote_ip
+            ORDER BY (up + down) DESC;
+            """;
+        AddRangeParams(cmd, fromUtcInclusive, toUtcInclusive, appNameOrAll);
+        return ReadIpUsageRows(cmd);
+    }
+
+    private static string AppFilterClause(string? appNameOrAll, string prefix)
+    {
+        if (appNameOrAll is null || IsAppAll(appNameOrAll))
+            return "";
+        return $"{prefix}app_name = $app\n";
+    }
+
+    private static void AddRangeParams(SqliteCommand cmd, string fromUtc, string toUtc, string? appNameOrAll)
+    {
+        cmd.Parameters.AddWithValue("$from", fromUtc);
+        cmd.Parameters.AddWithValue("$to", toUtc);
+        if (appNameOrAll is not null && !IsAppAll(appNameOrAll))
+            cmd.Parameters.AddWithValue("$app", appNameOrAll);
+    }
+
+    private static bool IsAppAll(string app) =>
+        app.Equals("all", StringComparison.OrdinalIgnoreCase);
+
+    private static List<AppUsageRow> ReadAppUsageRows(SqliteCommand cmd)
+    {
+        var list = new List<AppUsageRow>();
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            list.Add(new AppUsageRow(r.GetString(0), r.GetInt64(1), r.GetInt64(2)));
+        return list;
+    }
+
+    private static List<IpUsageRow> ReadIpUsageRows(SqliteCommand cmd)
+    {
+        var list = new List<IpUsageRow>();
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            list.Add(new IpUsageRow(r.GetString(0), r.GetInt64(1), r.GetInt64(2)));
+        return list;
+    }
+
+    public IReadOnlyList<IpReportRow> ReportByIp(string? filterIp = null)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = filterIp is null
+            ? """
+              SELECT remote_ip,
+                     SUM(bytes_sent) AS up,
+                     SUM(bytes_received) AS down
+              FROM usage
+              GROUP BY remote_ip
+              ORDER BY (up + down) DESC;
+              """
+            : """
+              SELECT remote_ip,
+                     SUM(bytes_sent) AS up,
+                     SUM(bytes_received) AS down
+              FROM usage
+              WHERE remote_ip = $f
+              GROUP BY remote_ip
+              ORDER BY (up + down) DESC;
+              """;
+        if (filterIp is not null)
+            cmd.Parameters.AddWithValue("$f", filterIp);
+        return ReadIpRows(cmd);
+    }
+
+    public IReadOnlyList<NicReportRow> ReportByNic(string? filterNic = null)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = filterNic is null
+            ? """
+              SELECT nic_name,
+                     SUM(bytes_sent) AS up,
+                     SUM(bytes_received) AS down
+              FROM usage
+              GROUP BY nic_name
+              ORDER BY (up + down) DESC;
+              """
+            : """
+              SELECT nic_name,
+                     SUM(bytes_sent) AS up,
+                     SUM(bytes_received) AS down
+              FROM usage
+              WHERE nic_name = $f
+              GROUP BY nic_name
+              ORDER BY (up + down) DESC;
+              """;
+        if (filterNic is not null)
+            cmd.Parameters.AddWithValue("$f", filterNic);
+        return ReadNicRows(cmd);
+    }
+
+    public IReadOnlyList<HostReportRow> ReportByHost(string? filterHost = null)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = filterHost is null
+            ? """
+              SELECT host_name,
+                     SUM(bytes_sent) AS up,
+                     SUM(bytes_received) AS down
+              FROM usage
+              GROUP BY host_name
+              ORDER BY (up + down) DESC;
+              """
+            : """
+              SELECT host_name,
+                     SUM(bytes_sent) AS up,
+                     SUM(bytes_received) AS down
+              FROM usage
+              WHERE host_name LIKE $f
+              GROUP BY host_name
+              ORDER BY (up + down) DESC;
+              """;
+        if (filterHost is not null)
+            cmd.Parameters.AddWithValue("$f", $"%{filterHost}%");
+        return ReadHostRows(cmd);
+    }
+
+    private static List<IpReportRow> ReadIpRows(SqliteCommand cmd)
+    {
+        var list = new List<IpReportRow>();
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            list.Add(new IpReportRow(
+                r.GetString(0),
+                r.GetInt64(1),
+                r.GetInt64(2)));
+        }
+
+        return list;
+    }
+
+    private static List<NicReportRow> ReadNicRows(SqliteCommand cmd)
+    {
+        var list = new List<NicReportRow>();
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            list.Add(new NicReportRow(
+                r.GetString(0),
+                r.GetInt64(1),
+                r.GetInt64(2)));
+        }
+
+        return list;
+    }
+
+    private static List<HostReportRow> ReadHostRows(SqliteCommand cmd)
+    {
+        var list = new List<HostReportRow>();
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+        {
+            list.Add(new HostReportRow(
+                r.GetString(0),
+                r.GetInt64(1),
+                r.GetInt64(2)));
+        }
+
+        return list;
+    }
+
+    public void Dispose() => _connection.Dispose();
+}
+
+internal readonly record struct TrafficDelta(
+    string AppName,
+    string NicName,
+    string RemoteIp,
+    int RemotePort,
+    string HostName,
+    long DeltaSent,
+    long DeltaReceived);
+
+internal readonly record struct IpReportRow(string RemoteIp, long BytesSent, long BytesReceived);
+
+internal readonly record struct NicReportRow(string NicName, long BytesSent, long BytesReceived);
+
+internal readonly record struct HostReportRow(string HostName, long BytesSent, long BytesReceived);
+
+internal readonly record struct UsageTotalsRow(long BytesSent, long BytesReceived);
+
+internal readonly record struct AppUsageRow(string AppName, long BytesSent, long BytesReceived);
+
+internal readonly record struct IpUsageRow(string RemoteIp, long BytesSent, long BytesReceived);
