@@ -111,11 +111,52 @@ internal static class Program
         usage.AddCommand(usageApp);
         usage.AddCommand(usageIp);
 
+        var blockAppOption = new Option<string>(
+            aliases: new[] { "--app" },
+            description: "Running process name (e.g. chrome) or full path to a .exe to block outbound for.")
+        { IsRequired = true };
+
+        var blockIpOption = new Option<string>(
+            aliases: new[] { "--ip" },
+            description: "Remote IPv4 or IPv6 address to block outbound traffic toward.")
+        { IsRequired = true };
+
+        var blockUrlOption = new Option<string>(
+            aliases: new[] { "--url" },
+            description: "URL or hostname; resolves DNS and blocks outbound to the returned IPs (CDN sites may need re-run).")
+        { IsRequired = true };
+
+        var blockApp = new Command("app", "Create a Windows Firewall rule blocking all outbound traffic for a program (run elevated)")
+        {
+            blockAppOption,
+        };
+        blockApp.SetHandler(RunBlockApp, blockAppOption);
+
+        var blockIp = new Command("ip", "Create a Windows Firewall rule blocking outbound traffic to an IP (run elevated)")
+        {
+            blockIpOption,
+        };
+        blockIp.SetHandler(RunBlockIp, blockIpOption);
+
+        var blockUrl = new Command("url", "Create a Windows Firewall rule blocking outbound traffic to IPs resolved from a URL/host (run elevated)")
+        {
+            blockUrlOption,
+        };
+        blockUrl.SetHandler(RunBlockUrl, blockUrlOption);
+
+        var block = new Command("block", "Add Windows Defender Firewall block rules via netsh")
+        {
+            blockApp,
+            blockIp,
+            blockUrl,
+        };
+
         var root = new RootCommand("Windows 11 TCP usage monitor (by IP, NIC, and host) backed by SQLite")
         {
             collect,
             report,
             usage,
+            block,
         };
 
         return await root.InvokeAsync(args);
@@ -286,6 +327,79 @@ internal static class Program
         Console.WriteLine($"{"Host / site",-48} {"Sent",12} {"Recv",12} {"Total",12}");
         foreach (var r in rows.Take(top))
             Console.WriteLine($"{r.HostName,-48} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
+    }
+
+    private static void RunBlockIp(string ip)
+    {
+        if (string.IsNullOrWhiteSpace(ip))
+        {
+            Console.Error.WriteLine("--ip is required.");
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        if (!FirewallBlockService.TryBlockOutboundToIp(ip, out var errorMessage))
+        {
+            Console.Error.WriteLine(errorMessage);
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        Console.WriteLine($"Added outbound block rule for remote IP {ip.Trim()}.");
+    }
+
+    private static void RunBlockUrl(string url)
+    {
+        if (string.IsNullOrWhiteSpace(url))
+        {
+            Console.Error.WriteLine("--url is required.");
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        if (!FirewallBlockService.TryBlockOutboundToUrl(url, out var errorMessage))
+        {
+            Console.Error.WriteLine(errorMessage);
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        Console.WriteLine("Added outbound block rule for IPs resolved from the URL/host.");
+    }
+
+    private static void RunBlockApp(string app)
+    {
+        if (string.IsNullOrWhiteSpace(app))
+        {
+            Console.Error.WriteLine("--app is required.");
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        var paths = FirewallBlockService.ResolveProgramPaths(app);
+        if (paths.Count == 0)
+        {
+            Console.Error.WriteLine(
+                "No matching .exe found. Pass a full path to the executable, or a process name while at least one instance is running.");
+            Environment.ExitCode = 1;
+            return;
+        }
+
+        var failed = false;
+        foreach (var path in paths)
+        {
+            if (!FirewallBlockService.TryBlockOutboundForProgram(path, out var errorMessage))
+            {
+                Console.Error.WriteLine($"{path}: {errorMessage}");
+                failed = true;
+                continue;
+            }
+
+            Console.WriteLine($"Added outbound block rule for program: {path}");
+        }
+
+        if (failed)
+            Environment.ExitCode = 1;
     }
 
     private static string FormatBytes(long value)
