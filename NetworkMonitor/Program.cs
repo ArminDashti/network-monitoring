@@ -41,6 +41,8 @@ internal static class Program
             getDefaultValue: () => "all",
             description: "Process name filter (exact match), or 'all'.");
 
+#if WINDOWS
+        // Live TCP sampling uses Windows IP Helper APIs; only included in the Windows-targeted build.
         var collect = new Command("collect", "Run the monitor loop (TCP per-connection counters; run elevated for full coverage)")
         {
             intervalOption,
@@ -48,6 +50,7 @@ internal static class Program
         };
 
         collect.SetHandler(RunCollectAsync, intervalOption, dbOption);
+#endif
 
         var report = new Command("report", "Print lifetime aggregated usage from the database (all time, not time-ranged)")
         {
@@ -111,9 +114,17 @@ internal static class Program
         usage.AddCommand(usageApp);
         usage.AddCommand(usageIp);
 
-        var root = new RootCommand("Windows 11 TCP usage monitor (by IP, NIC, and host) backed by SQLite")
+#if WINDOWS
+        const string rootDescription = "Windows TCP usage monitor (by IP, NIC, and host) backed by SQLite";
+#else
+        const string rootDescription = "Query NetworkMonitor SQLite data (report/usage). Run `collect` on Windows to record samples.";
+#endif
+
+        var root = new RootCommand(rootDescription)
         {
+#if WINDOWS
             collect,
+#endif
             report,
             usage,
         };
@@ -199,6 +210,7 @@ internal static class Program
         return DateTime.SpecifyKind(parsed, DateTimeKind.Local);
     }
 
+#if WINDOWS
     private static async Task RunCollectAsync(int intervalSeconds, string dbPath)
     {
         using var store = new TrafficStore(dbPath);
@@ -242,6 +254,7 @@ internal static class Program
             }
         }
     }
+#endif
 
     private static void RunReport(string mode, string? filter, string dbPath, int top)
     {

@@ -1,3 +1,4 @@
+#if WINDOWS
 using System.Net;
 using NetworkMonitor.Native;
 using NetworkMonitor.Storage;
@@ -128,3 +129,4 @@ internal sealed class TrafficCollector
         return false;
     }
 }
+#endif

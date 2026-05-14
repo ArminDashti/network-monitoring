@@ -1,3 +1,4 @@
+#if WINDOWS
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -41,3 +42,4 @@ internal static class ProcessNameResolver
         }
     }
 }
+#endif
