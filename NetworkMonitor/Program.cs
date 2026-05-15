@@ -7,8 +7,9 @@ namespace NetworkMonitor;
 
 internal static class Program
 {
-    private const string DateTimeFormat = "yyyy-MM-dd'T'HH:mm:ss";
+    private const string DateTimeFormat = "yyyy-MM-dd'T'HH:mm:ss"; // Local time format for CLI date options
 
+    // Builds the CLI and runs the command the user asked for
     public static async Task<int> Main(string[] args)
     {
         var dbOption = new Option<string>(
@@ -118,9 +119,10 @@ internal static class Program
             usage,
         };
 
-        return await root.InvokeAsync(args);
+        return await root.InvokeAsync(args); // Parse args and dispatch handler
     }
 
+    // Prints total upload and download for a time range
     private static void RunUsageTotals(string? fromRaw, string? toRaw, string dbPath)
     {
         var (fromUtc, toUtc) = ResolveRangeUtc(fromRaw, toRaw);
@@ -132,6 +134,7 @@ internal static class Program
         Console.WriteLine($"Total:           {FormatBytes(row.BytesSent + row.BytesReceived)}");
     }
 
+    // Prints download bytes only for a time range
     private static void RunUsageDownload(string? fromRaw, string? toRaw, string dbPath)
     {
         var (fromUtc, toUtc) = ResolveRangeUtc(fromRaw, toRaw);
@@ -141,6 +144,7 @@ internal static class Program
         Console.WriteLine($"Download (recv): {FormatBytes(row.BytesReceived)}");
     }
 
+    // Prints upload bytes only for a time range
     private static void RunUsageUpload(string? fromRaw, string? toRaw, string dbPath)
     {
         var (fromUtc, toUtc) = ResolveRangeUtc(fromRaw, toRaw);
@@ -150,6 +154,7 @@ internal static class Program
         Console.WriteLine($"Upload (sent): {FormatBytes(row.BytesSent)}");
     }
 
+    // Prints per-application traffic for a time range
     private static void RunUsageByApp(string? fromRaw, string? toRaw, string app, string dbPath)
     {
         var (fromUtc, toUtc) = ResolveRangeUtc(fromRaw, toRaw);
@@ -161,6 +166,7 @@ internal static class Program
             Console.WriteLine($"{r.AppName,-32} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
     }
 
+    // Prints per-remote-IP traffic for a time range
     private static void RunUsageByIp(string? fromRaw, string? toRaw, string app, string dbPath)
     {
         var (fromUtc, toUtc) = ResolveRangeUtc(fromRaw, toRaw);
@@ -172,21 +178,23 @@ internal static class Program
             Console.WriteLine($"{r.RemoteIp,-40} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
     }
 
+    // Converts optional local date strings into inclusive UTC range endpoints
     private static (string FromUtc, string ToUtc) ResolveRangeUtc(string? fromRaw, string? toRaw)
     {
-        var fromLocal = ParseBoundaryOrDefault(fromRaw, DateTime.Today);
-        var toLocal = ParseBoundaryOrDefault(toRaw, DateTime.Now);
-        if (toLocal < fromLocal)
+        var fromLocal = ParseBoundaryOrDefault(fromRaw, DateTime.Today); // Default start is midnight today
+        var toLocal = ParseBoundaryOrDefault(toRaw, DateTime.Now); // Default end is now
+        if (toLocal < fromLocal) // Swap if user reversed the range
             (fromLocal, toLocal) = (toLocal, fromLocal);
 
-        var fromUtc = fromLocal.ToUniversalTime().ToString("O");
+        var fromUtc = fromLocal.ToUniversalTime().ToString("O"); // ISO UTC text
         var toUtc = toLocal.ToUniversalTime().ToString("O");
         return (fromUtc, toUtc);
     }
 
+    // Parses one CLI datetime or returns the provided default local time
     private static DateTime ParseBoundaryOrDefault(string? raw, DateTime defaultValue)
     {
-        if (string.IsNullOrWhiteSpace(raw))
+        if (string.IsNullOrWhiteSpace(raw)) // Use default when flag omitted
             return defaultValue;
 
         if (!DateTime.TryParseExact(raw.Trim(), DateTimeFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
@@ -196,9 +204,10 @@ internal static class Program
             return default;
         }
 
-        return DateTime.SpecifyKind(parsed, DateTimeKind.Local);
+        return DateTime.SpecifyKind(parsed, DateTimeKind.Local); // Treat input as local clock time
     }
 
+    // Runs the background sampling loop until the user presses Ctrl+C
     private static async Task RunCollectAsync(int intervalSeconds, string dbPath)
     {
         using var store = new TrafficStore(dbPath);
@@ -213,16 +222,16 @@ internal static class Program
         using var cts = new CancellationTokenSource();
         Console.CancelKeyPress += (_, e) =>
         {
-            e.Cancel = true;
-            cts.Cancel();
+            e.Cancel = true; // Do not kill the process immediately
+            cts.Cancel(); // Stop the loop gracefully
         };
 
         while (!cts.IsCancellationRequested)
         {
             try
             {
-                var deltas = collector.CollectDeltas();
-                store.ApplyDeltas(deltas);
+                var deltas = collector.CollectDeltas(); // Poll Windows TCP counters
+                store.ApplyDeltas(deltas); // Persist new bytes to SQLite
                 var ts = DateTime.Now.ToString("T");
                 var sum = deltas.Sum(d => d.DeltaSent + d.DeltaReceived);
                 Console.WriteLine($"[{ts}] connections with new data: {deltas.Count}, interval volume: {FormatBytes(sum)}");
@@ -234,15 +243,16 @@ internal static class Program
 
             try
             {
-                await Task.Delay(TimeSpan.FromSeconds(intervalSeconds), cts.Token);
+                await Task.Delay(TimeSpan.FromSeconds(intervalSeconds), cts.Token); // Wait until next sample
             }
             catch (TaskCanceledException)
             {
-                break;
+                break; // Exit loop after Ctrl+C
             }
         }
     }
 
+    // Prints a lifetime report grouped by ip, nic, or host
     private static void RunReport(string mode, string? filter, string dbPath, int top)
     {
         using var store = new TrafficStore(dbPath);
@@ -267,6 +277,7 @@ internal static class Program
         }
     }
 
+    // Prints IP report rows with byte columns
     private static void PrintIp(IReadOnlyList<IpReportRow> rows, int top)
     {
         Console.WriteLine($"{"IP",-40} {"Sent",12} {"Recv",12} {"Total",12}");
@@ -274,6 +285,7 @@ internal static class Program
             Console.WriteLine($"{r.RemoteIp,-40} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
     }
 
+    // Prints NIC report rows with byte columns
     private static void PrintNic(IReadOnlyList<NicReportRow> rows, int top)
     {
         Console.WriteLine($"{"NIC",-32} {"Sent",12} {"Recv",12} {"Total",12}");
@@ -281,6 +293,7 @@ internal static class Program
             Console.WriteLine($"{r.NicName,-32} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
     }
 
+    // Prints host report rows with byte columns
     private static void PrintHost(IReadOnlyList<HostReportRow> rows, int top)
     {
         Console.WriteLine($"{"Host / site",-48} {"Sent",12} {"Recv",12} {"Total",12}");
@@ -288,9 +301,10 @@ internal static class Program
             Console.WriteLine($"{r.HostName,-48} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
     }
 
+    // Formats a byte count as B, KB, MB, GB, or TB
     private static string FormatBytes(long value)
     {
-        if (value < 0)
+        if (value < 0) // Guard against bad data
             value = 0;
 
         const double k = 1024d;
