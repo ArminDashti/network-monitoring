@@ -1,4 +1,5 @@
 using Microsoft.Data.Sqlite;
+using NetworkMonitor.Cli;
 
 namespace NetworkMonitor.Storage;
 
@@ -84,21 +85,28 @@ internal sealed class TrafficStore : IDisposable
         tx.Commit();
     }
 
-    public UsageTotalsRow UsageTotalsInRangeUtc(string fromUtcInclusive, string toUtcInclusive, string? appNameOrAll)
+    public UsageTotalsRow UsageTotalsInRangeUtc(
+        string fromUtcInclusive,
+        string toUtcInclusive,
+        UsageTarget target,
+        bool includePrivate)
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = """
             SELECT COALESCE(SUM(bytes_sent), 0), COALESCE(SUM(bytes_received), 0)
             FROM usage
             WHERE minute_utc >= $from AND minute_utc <= $to
-            """ + AppFilterClause(appNameOrAll, "AND ");
-        AddRangeParams(cmd, fromUtcInclusive, toUtcInclusive, appNameOrAll);
+            """ + QueryFilters.PrivateIpExcludeClause(includePrivate) + QueryFilters.TargetClause(target.Kind, target.Value);
+        AddRangeAndTargetParams(cmd, fromUtcInclusive, toUtcInclusive, target);
         using var r = cmd.ExecuteReader();
         r.Read();
         return new UsageTotalsRow(r.GetInt64(0), r.GetInt64(1));
     }
 
-    public IReadOnlyList<AppUsageRow> UsageByAppInRangeUtc(string fromUtcInclusive, string toUtcInclusive, string? appNameOrAll)
+    public IReadOnlyList<AppUsageRow> UsageByAppInRangeUtc(
+        string fromUtcInclusive,
+        string toUtcInclusive,
+        bool includePrivate)
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = """
@@ -107,48 +115,132 @@ internal sealed class TrafficStore : IDisposable
                    COALESCE(SUM(bytes_received), 0) AS down
             FROM usage
             WHERE minute_utc >= $from AND minute_utc <= $to
-            """ + AppFilterClause(appNameOrAll, "AND ") + """
+            """ + QueryFilters.PrivateIpExcludeClause(includePrivate) + """
             GROUP BY app_name
             ORDER BY (up + down) DESC;
             """;
-        AddRangeParams(cmd, fromUtcInclusive, toUtcInclusive, appNameOrAll);
+        cmd.Parameters.AddWithValue("$from", fromUtcInclusive);
+        cmd.Parameters.AddWithValue("$to", toUtcInclusive);
         return ReadAppUsageRows(cmd);
     }
 
-    public IReadOnlyList<IpUsageRow> UsageByIpInRangeUtc(string fromUtcInclusive, string toUtcInclusive, string? appNameOrAll)
+    public IReadOnlyList<IpUsageRow> UsageByIpInRangeUtc(
+        string fromUtcInclusive,
+        string toUtcInclusive,
+        bool includePrivate,
+        int? limit = null)
     {
         using var cmd = _connection.CreateCommand();
+        var limitClause = limit is null ? "" : $" LIMIT {limit.Value}";
         cmd.CommandText = """
             SELECT remote_ip,
                    COALESCE(SUM(bytes_sent), 0) AS up,
                    COALESCE(SUM(bytes_received), 0) AS down
             FROM usage
             WHERE minute_utc >= $from AND minute_utc <= $to
-            """ + AppFilterClause(appNameOrAll, "AND ") + """
+            """ + QueryFilters.PrivateIpExcludeClause(includePrivate) + """
             GROUP BY remote_ip
-            ORDER BY (up + down) DESC;
-            """;
-        AddRangeParams(cmd, fromUtcInclusive, toUtcInclusive, appNameOrAll);
+            ORDER BY (up + down) DESC
+            """ + limitClause + ";";
+        cmd.Parameters.AddWithValue("$from", fromUtcInclusive);
+        cmd.Parameters.AddWithValue("$to", toUtcInclusive);
         return ReadIpUsageRows(cmd);
     }
 
-    private static string AppFilterClause(string? appNameOrAll, string prefix)
+    public IReadOnlyList<HostUsageRow> UsageByHostInRangeUtc(
+        string fromUtcInclusive,
+        string toUtcInclusive,
+        bool includePrivate,
+        int? limit = null)
     {
-        if (appNameOrAll is null || IsAppAll(appNameOrAll))
-            return "";
-        return $"{prefix}app_name = $app\n";
+        using var cmd = _connection.CreateCommand();
+        var limitClause = limit is null ? "" : $" LIMIT {limit.Value}";
+        cmd.CommandText = """
+            SELECT host_name,
+                   COALESCE(SUM(bytes_sent), 0) AS up,
+                   COALESCE(SUM(bytes_received), 0) AS down
+            FROM usage
+            WHERE minute_utc >= $from AND minute_utc <= $to
+            """ + QueryFilters.PrivateIpExcludeClause(includePrivate) + """
+            GROUP BY host_name
+            ORDER BY (up + down) DESC
+            """ + limitClause + ";";
+        cmd.Parameters.AddWithValue("$from", fromUtcInclusive);
+        cmd.Parameters.AddWithValue("$to", toUtcInclusive);
+        return ReadHostUsageRows(cmd);
     }
 
-    private static void AddRangeParams(SqliteCommand cmd, string fromUtc, string toUtc, string? appNameOrAll)
+    public IReadOnlyList<string> ListAppNames(string? filter)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = filter is null
+            ? """
+              SELECT DISTINCT app_name
+              FROM usage
+              ORDER BY app_name COLLATE NOCASE;
+              """
+            : """
+              SELECT DISTINCT app_name
+              FROM usage
+              WHERE app_name LIKE $filter
+              ORDER BY app_name COLLATE NOCASE;
+              """;
+        if (filter is not null)
+            cmd.Parameters.AddWithValue("$filter", $"%{filter}%");
+
+        var list = new List<string>();
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            list.Add(r.GetString(0));
+        return list;
+    }
+
+    public DatabaseInfoRow GetDatabaseInfo(string databasePath)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*),
+                   MIN(minute_utc),
+                   MAX(minute_utc),
+                   COUNT(DISTINCT app_name)
+            FROM usage;
+            """;
+        using var r = cmd.ExecuteReader();
+        r.Read();
+        var rowCount = r.IsDBNull(0) ? 0L : r.GetInt64(0);
+        var firstMinute = r.IsDBNull(1) ? null : r.GetString(1);
+        var lastMinute = r.IsDBNull(2) ? null : r.GetString(2);
+        var appCount = r.IsDBNull(3) ? 0L : r.GetInt64(3);
+
+        long fileBytes = 0;
+        try
+        {
+            if (File.Exists(databasePath))
+                fileBytes = new FileInfo(databasePath).Length;
+        }
+        catch
+        {
+            // Ignore file stat errors.
+        }
+
+        return new DatabaseInfoRow(databasePath, rowCount, firstMinute, lastMinute, appCount, fileBytes);
+    }
+
+    private static void AddRangeAndTargetParams(SqliteCommand cmd, string fromUtc, string toUtc, UsageTarget target)
     {
         cmd.Parameters.AddWithValue("$from", fromUtc);
         cmd.Parameters.AddWithValue("$to", toUtc);
-        if (appNameOrAll is not null && !IsAppAll(appNameOrAll))
-            cmd.Parameters.AddWithValue("$app", appNameOrAll);
+        QueryFilters.AddTargetParameters(cmd, target.Kind, target.Value);
     }
 
-    private static bool IsAppAll(string app) =>
-        app.Equals("all", StringComparison.OrdinalIgnoreCase);
+    private static List<HostUsageRow> ReadHostUsageRows(SqliteCommand cmd)
+    {
+        var list = new List<HostUsageRow>();
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            list.Add(new HostUsageRow(r.GetString(0), r.GetInt64(1), r.GetInt64(2)));
+        return list;
+    }
 
     private static List<AppUsageRow> ReadAppUsageRows(SqliteCommand cmd)
     {
@@ -314,3 +406,13 @@ internal readonly record struct UsageTotalsRow(long BytesSent, long BytesReceive
 internal readonly record struct AppUsageRow(string AppName, long BytesSent, long BytesReceived);
 
 internal readonly record struct IpUsageRow(string RemoteIp, long BytesSent, long BytesReceived);
+
+internal readonly record struct HostUsageRow(string HostName, long BytesSent, long BytesReceived);
+
+internal readonly record struct DatabaseInfoRow(
+    string DatabasePath,
+    long RowCount,
+    string? FirstMinuteUtc,
+    string? LastMinuteUtc,
+    long DistinctAppCount,
+    long FileBytes);
