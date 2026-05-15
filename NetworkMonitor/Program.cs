@@ -1,307 +1,303 @@
 using System.CommandLine;
-using System.Globalization;
-using NetworkMonitor.Services;
+using System.Reflection;
+using NetworkMonitor.Cli;
 using NetworkMonitor.Storage;
 
 namespace NetworkMonitor;
 
+internal enum UsageMetric
+{
+  Total,
+  Download,
+  Upload,
+}
+
 internal static class Program
 {
-    private const string DateTimeFormat = "yyyy-MM-dd'T'HH:mm:ss";
+  private static readonly string DefaultDbPath = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+    "NetworkMonitor",
+    "traffic.db");
 
-    public static async Task<int> Main(string[] args)
+  public static async Task<int> Main(string[] args)
+  {
+    var dbOption = new Option<string>(
+      aliases: new[] { "--db", "-d" },
+      getDefaultValue: () => DefaultDbPath)
+    { Description = "SQLite database path" };
+
+    var filterOption = new Option<string?>(
+      aliases: new[] { "--filter" },
+      description: "Optional substring filter for app names.")
+    { Arity = ArgumentArity.ZeroOrOne };
+
+    var usage = new Command("usage", "Usage in a time range from collected samples");
+    var usageOpts = CreateUsageOptions();
+    RegisterUsageHandler(usage, UsageMetric.Total, usageOpts);
+
+    var usageDownload = new Command("download", "Download (received) bytes in the time range");
+    var downloadOpts = CreateUsageOptions();
+    RegisterUsageHandler(usageDownload, UsageMetric.Download, downloadOpts);
+
+    var usageUpload = new Command("upload", "Upload (sent) bytes in the time range");
+    var uploadOpts = CreateUsageOptions();
+    RegisterUsageHandler(usageUpload, UsageMetric.Upload, uploadOpts);
+
+    usage.AddCommand(usageDownload);
+    usage.AddCommand(usageUpload);
+
+    var info = new Command("info", "Database path, coverage, and version")
     {
-        var dbOption = new Option<string>(
-            aliases: new[] { "--db", "-d" },
-            getDefaultValue: () => Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NetworkMonitor", "traffic.db"))
-        { Description = "SQLite database path" };
+      dbOption,
+    };
+    info.SetHandler(RunInfo, dbOption);
 
-        var intervalOption = new Option<int>(
-            aliases: new[] { "--interval", "-i" },
-            getDefaultValue: () => 5)
-        { Description = "Seconds between TCP samples" };
+    var appsList = new Command("list", "List application names seen in the database")
+    {
+      filterOption,
+      dbOption,
+    };
+    appsList.SetHandler(RunAppsList, filterOption, dbOption);
 
-        var topOption = new Option<int>(
-            aliases: new[] { "--top", "-n" },
-            getDefaultValue: () => 25)
-        { Description = "Maximum rows to print" };
+    var apps = new Command("apps", "Application names from collected traffic")
+    {
+      appsList,
+    };
 
-        var fromOption = new Option<string?>(
-            aliases: new[] { "--from-datetime" },
-            description: $"Start of range (local). Format {DateTimeFormat}. Default: today 00:00:00.")
-        { Arity = ArgumentArity.ZeroOrOne };
+    var root = new RootCommand("Windows TCP usage monitor (netm)")
+    {
+      info,
+      usage,
+      apps,
+    };
 
-        var toOption = new Option<string?>(
-            aliases: new[] { "--to-datetime" },
-            description: $"End of range (local), inclusive. Format {DateTimeFormat}. Default: now.")
-        { Arity = ArgumentArity.ZeroOrOne };
+    return await root.InvokeAsync(args);
+  }
 
-        var appOption = new Option<string>(
-            aliases: new[] { "--app" },
-            getDefaultValue: () => "all",
-            description: "Process name filter (exact match), or 'all'.");
+  private sealed record UsageOptions(
+    Option<string?> Target,
+    Option<string?> From,
+    Option<string?> To,
+    Option<string> IncludePrivate,
+    Option<string> Db);
 
-        var collect = new Command("collect", "Run the monitor loop (TCP per-connection counters; run elevated for full coverage)")
-        {
-            intervalOption,
-            dbOption,
-        };
+  private static UsageOptions CreateUsageOptions()
+  {
+    return new UsageOptions(
+      new Option<string?>(
+        aliases: new[] { "--target" },
+        description: "apps | ip | host | <app-name> | <x.x.x.x> | <hostname>. Omit for all apps combined.")
+      { Arity = ArgumentArity.ZeroOrOne },
+      new Option<string?>(
+        aliases: new[] { "--from-datetime" },
+        description: $"Start of range (local). Format {CompactDateTime.Format}. Date-only yyMMdd uses T0000.")
+      { Arity = ArgumentArity.ZeroOrOne },
+      new Option<string?>(
+        aliases: new[] { "--to-datetime" },
+        description: $"End of range (local), inclusive. Format {CompactDateTime.Format}. Default: now.")
+      { Arity = ArgumentArity.ZeroOrOne },
+      new Option<string>(
+        aliases: new[] { "--include-private" },
+        getDefaultValue: () => "no",
+        description: "Include private/local IP traffic: yes | no (default: no).")
+      { Arity = ArgumentArity.ZeroOrOne },
+      new Option<string>(
+        aliases: new[] { "--db", "-d" },
+        getDefaultValue: () => DefaultDbPath)
+      { Description = "SQLite database path" });
+  }
 
-        collect.SetHandler(RunCollectAsync, intervalOption, dbOption);
+  private static void RegisterUsageHandler(Command command, UsageMetric metric, UsageOptions options)
+  {
+    command.AddOption(options.Target);
+    command.AddOption(options.From);
+    command.AddOption(options.To);
+    command.AddOption(options.IncludePrivate);
+    command.AddOption(options.Db);
+    command.SetHandler(
+      (target, from, to, includePrivate, db) => RunUsage(metric, target, from, to, includePrivate, db),
+      options.Target, options.From, options.To, options.IncludePrivate, options.Db);
+  }
 
-        var report = new Command("report", "Print lifetime aggregated usage from the database (all time, not time-ranged)")
-        {
-            dbOption,
-            topOption,
-        };
+  private static void RunInfo(string dbPath)
+  {
+    using var store = new TrafficStore(dbPath);
+    var info = store.GetDatabaseInfo(dbPath);
+    var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
 
-        var mode = new Argument<string>("mode")
-        {
-            Description = "ip | nic | host",
-        };
-        var filter = new Argument<string?>("filter") { Arity = ArgumentArity.ZeroOrOne };
-        report.AddArgument(mode);
-        report.AddArgument(filter);
-        report.SetHandler(RunReport, mode, filter, dbOption, topOption);
+    Console.WriteLine($"Version:    {version}");
+    Console.WriteLine($"Database:   {Path.GetFullPath(info.DatabasePath)}");
+    Console.WriteLine($"File size:  {FormatBytes(info.FileBytes)}");
+    Console.WriteLine($"Rows:       {info.RowCount:N0}");
+    Console.WriteLine($"Apps:       {info.DistinctAppCount:N0}");
+    Console.WriteLine($"First UTC:  {info.FirstMinuteUtc ?? "(none)"}");
+    Console.WriteLine($"Last UTC:   {info.LastMinuteUtc ?? "(none)"}");
+    Console.WriteLine($"Datetime:   local {CompactDateTime.Format} (date-only yyMMdd → T0000)");
+  }
 
-        var usage = new Command("usage", "Usage in a time range from collected samples (run collect to record data)")
-        {
-            fromOption,
-            toOption,
-            dbOption,
-        };
-        usage.SetHandler(RunUsageTotals, fromOption, toOption, dbOption);
+  private static void RunAppsList(string? filter, string dbPath)
+  {
+    using var store = new TrafficStore(dbPath);
+    var apps = store.ListAppNames(filter);
+    if (filter is not null)
+      Console.WriteLine($"Filter: {filter}");
+    foreach (var app in apps)
+      Console.WriteLine(app);
+    Console.WriteLine($"Count: {apps.Count}");
+  }
 
-        var usageDownload = new Command("download", "Bytes received (download) in the time range")
-        {
-            fromOption,
-            toOption,
-            dbOption,
-        };
-        usageDownload.SetHandler(RunUsageDownload, fromOption, toOption, dbOption);
+  private static void RunUsage(
+    UsageMetric metric,
+    string? targetRaw,
+    string? fromRaw,
+    string? toRaw,
+    string includePrivateRaw,
+    string dbPath)
+  {
+    var target = UsageTarget.Parse(targetRaw);
+    var includePrivate = ParseIncludePrivate(includePrivateRaw);
+    var (fromUtc, toUtc) = CompactDateTime.ResolveRangeUtc(fromRaw, toRaw);
 
-        var usageUpload = new Command("upload", "Bytes sent (upload) in the time range")
-        {
-            fromOption,
-            toOption,
-            dbOption,
-        };
-        usageUpload.SetHandler(RunUsageUpload, fromOption, toOption, dbOption);
+    using var store = new TrafficStore(dbPath);
+    PrintRangeHeader(fromUtc, toUtc, target, includePrivate);
 
-        var usageApp = new Command("app", "Break down usage by application (process name)")
-        {
-            fromOption,
-            toOption,
-            appOption,
-            dbOption,
-        };
-        usageApp.SetHandler(RunUsageByApp, fromOption, toOption, appOption, dbOption);
-
-        var usageIp = new Command("ip", "Break down usage by remote IP")
-        {
-            fromOption,
-            toOption,
-            appOption,
-            dbOption,
-        };
-        usageIp.SetHandler(RunUsageByIp, fromOption, toOption, appOption, dbOption);
-
-        usage.AddCommand(usageDownload);
-        usage.AddCommand(usageUpload);
-        usage.AddCommand(usageApp);
-        usage.AddCommand(usageIp);
-
-        var root = new RootCommand("Windows 11 TCP usage monitor (by IP, NIC, and host) backed by SQLite")
-        {
-            collect,
-            report,
-            usage,
-        };
-
-        return await root.InvokeAsync(args);
+    switch (target.Kind)
+    {
+      case UsageTargetKind.Apps:
+        PrintAppRows(store.UsageByAppInRangeUtc(fromUtc, toUtc, includePrivate), metric);
+        break;
+      case UsageTargetKind.IpTop100:
+        PrintIpRows(store.UsageByIpInRangeUtc(fromUtc, toUtc, includePrivate, QueryFilters.TopUsageLimit), metric);
+        break;
+      case UsageTargetKind.HostTop100:
+        PrintHostRows(store.UsageByHostInRangeUtc(fromUtc, toUtc, includePrivate, QueryFilters.TopUsageLimit), metric);
+        break;
+      default:
+        var totals = store.UsageTotalsInRangeUtc(fromUtc, toUtc, target, includePrivate);
+        PrintTotals(totals, metric);
+        break;
     }
+  }
 
-    private static void RunUsageTotals(string? fromRaw, string? toRaw, string dbPath)
+  private static bool ParseIncludePrivate(string raw)
+  {
+    if (raw.Equals("yes", StringComparison.OrdinalIgnoreCase) || raw.Equals("true", StringComparison.OrdinalIgnoreCase) || raw == "1")
+      return true;
+    if (raw.Equals("no", StringComparison.OrdinalIgnoreCase) || raw.Equals("false", StringComparison.OrdinalIgnoreCase) || raw == "0")
+      return false;
+
+    Console.Error.WriteLine($"Invalid --include-private '{raw}'. Use yes or no.");
+    Environment.Exit(1);
+    return false;
+  }
+
+  private static void PrintRangeHeader(string fromUtc, string toUtc, UsageTarget target, bool includePrivate)
+  {
+    var targetLabel = target.Kind switch
     {
-        var (fromUtc, toUtc) = ResolveRangeUtc(fromRaw, toRaw);
-        using var store = new TrafficStore(dbPath);
-        var row = store.UsageTotalsInRangeUtc(fromUtc, toUtc, appNameOrAll: null);
-        Console.WriteLine($"Range (UTC): {fromUtc} .. {toUtc} (inclusive)");
+      UsageTargetKind.All => "all apps",
+      UsageTargetKind.Apps => "apps",
+      UsageTargetKind.IpTop100 => "ip (top 100)",
+      UsageTargetKind.HostTop100 => "host (top 100)",
+      _ => target.Value ?? "",
+    };
+    Console.WriteLine($"Range (UTC): {fromUtc} .. {toUtc} (inclusive)");
+    Console.WriteLine($"Target:      {targetLabel}");
+    Console.WriteLine($"Private IPs: {(includePrivate ? "included" : "excluded")}");
+  }
+
+  private static void PrintTotals(UsageTotalsRow row, UsageMetric metric)
+  {
+    switch (metric)
+    {
+      case UsageMetric.Download:
+        Console.WriteLine($"Download (recv): {FormatBytes(row.BytesReceived)}");
+        break;
+      case UsageMetric.Upload:
+        Console.WriteLine($"Upload (sent):   {FormatBytes(row.BytesSent)}");
+        break;
+      default:
         Console.WriteLine($"Upload (sent):   {FormatBytes(row.BytesSent)}");
         Console.WriteLine($"Download (recv): {FormatBytes(row.BytesReceived)}");
         Console.WriteLine($"Total:           {FormatBytes(row.BytesSent + row.BytesReceived)}");
+        break;
     }
+  }
 
-    private static void RunUsageDownload(string? fromRaw, string? toRaw, string dbPath)
+  private static void PrintAppRows(IReadOnlyList<AppUsageRow> rows, UsageMetric metric)
+  {
+    Console.WriteLine(metric switch
     {
-        var (fromUtc, toUtc) = ResolveRangeUtc(fromRaw, toRaw);
-        using var store = new TrafficStore(dbPath);
-        var row = store.UsageTotalsInRangeUtc(fromUtc, toUtc, appNameOrAll: null);
-        Console.WriteLine($"Range (UTC): {fromUtc} .. {toUtc} (inclusive)");
-        Console.WriteLine($"Download (recv): {FormatBytes(row.BytesReceived)}");
-    }
+      UsageMetric.Download => $"{"Application",-32} {"Download",12}",
+      UsageMetric.Upload => $"{"Application",-32} {"Upload",12}",
+      _ => $"{"Application",-32} {"Upload",12} {"Download",12} {"Total",12}",
+    });
 
-    private static void RunUsageUpload(string? fromRaw, string? toRaw, string dbPath)
+    foreach (var r in rows)
     {
-        var (fromUtc, toUtc) = ResolveRangeUtc(fromRaw, toRaw);
-        using var store = new TrafficStore(dbPath);
-        var row = store.UsageTotalsInRangeUtc(fromUtc, toUtc, appNameOrAll: null);
-        Console.WriteLine($"Range (UTC): {fromUtc} .. {toUtc} (inclusive)");
-        Console.WriteLine($"Upload (sent): {FormatBytes(row.BytesSent)}");
+      Console.WriteLine(metric switch
+      {
+        UsageMetric.Download => $"{r.AppName,-32} {FormatBytes(r.BytesReceived),12}",
+        UsageMetric.Upload => $"{r.AppName,-32} {FormatBytes(r.BytesSent),12}",
+        _ => $"{r.AppName,-32} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}",
+      });
     }
+  }
 
-    private static void RunUsageByApp(string? fromRaw, string? toRaw, string app, string dbPath)
+  private static void PrintIpRows(IReadOnlyList<IpUsageRow> rows, UsageMetric metric)
+  {
+    Console.WriteLine(metric switch
     {
-        var (fromUtc, toUtc) = ResolveRangeUtc(fromRaw, toRaw);
-        using var store = new TrafficStore(dbPath);
-        var rows = store.UsageByAppInRangeUtc(fromUtc, toUtc, app);
-        Console.WriteLine($"Range (UTC): {fromUtc} .. {toUtc} (inclusive); app filter: {app}");
-        Console.WriteLine($"{"Application",-32} {"Sent",12} {"Recv",12} {"Total",12}");
-        foreach (var r in rows)
-            Console.WriteLine($"{r.AppName,-32} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
-    }
+      UsageMetric.Download => $"{"Remote IP",-40} {"Download",12}",
+      UsageMetric.Upload => $"{"Remote IP",-40} {"Upload",12}",
+      _ => $"{"Remote IP",-40} {"Upload",12} {"Download",12} {"Total",12}",
+    });
 
-    private static void RunUsageByIp(string? fromRaw, string? toRaw, string app, string dbPath)
+    foreach (var r in rows)
     {
-        var (fromUtc, toUtc) = ResolveRangeUtc(fromRaw, toRaw);
-        using var store = new TrafficStore(dbPath);
-        var rows = store.UsageByIpInRangeUtc(fromUtc, toUtc, app);
-        Console.WriteLine($"Range (UTC): {fromUtc} .. {toUtc} (inclusive); app filter: {app}");
-        Console.WriteLine($"{"Remote IP",-40} {"Sent",12} {"Recv",12} {"Total",12}");
-        foreach (var r in rows)
-            Console.WriteLine($"{r.RemoteIp,-40} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
+      Console.WriteLine(metric switch
+      {
+        UsageMetric.Download => $"{r.RemoteIp,-40} {FormatBytes(r.BytesReceived),12}",
+        UsageMetric.Upload => $"{r.RemoteIp,-40} {FormatBytes(r.BytesSent),12}",
+        _ => $"{r.RemoteIp,-40} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}",
+      });
     }
+  }
 
-    private static (string FromUtc, string ToUtc) ResolveRangeUtc(string? fromRaw, string? toRaw)
+  private static void PrintHostRows(IReadOnlyList<HostUsageRow> rows, UsageMetric metric)
+  {
+    Console.WriteLine(metric switch
     {
-        var fromLocal = ParseBoundaryOrDefault(fromRaw, DateTime.Today);
-        var toLocal = ParseBoundaryOrDefault(toRaw, DateTime.Now);
-        if (toLocal < fromLocal)
-            (fromLocal, toLocal) = (toLocal, fromLocal);
+      UsageMetric.Download => $"{"Host",-48} {"Download",12}",
+      UsageMetric.Upload => $"{"Host",-48} {"Upload",12}",
+      _ => $"{"Host",-48} {"Upload",12} {"Download",12} {"Total",12}",
+    });
 
-        var fromUtc = fromLocal.ToUniversalTime().ToString("O");
-        var toUtc = toLocal.ToUniversalTime().ToString("O");
-        return (fromUtc, toUtc);
-    }
-
-    private static DateTime ParseBoundaryOrDefault(string? raw, DateTime defaultValue)
+    foreach (var r in rows)
     {
-        if (string.IsNullOrWhiteSpace(raw))
-            return defaultValue;
-
-        if (!DateTime.TryParseExact(raw.Trim(), DateTimeFormat, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
-        {
-            Console.Error.WriteLine($"Invalid datetime '{raw}'. Expected {DateTimeFormat} (local time).");
-            Environment.Exit(1);
-            return default;
-        }
-
-        return DateTime.SpecifyKind(parsed, DateTimeKind.Local);
+      Console.WriteLine(metric switch
+      {
+        UsageMetric.Download => $"{r.HostName,-48} {FormatBytes(r.BytesReceived),12}",
+        UsageMetric.Upload => $"{r.HostName,-48} {FormatBytes(r.BytesSent),12}",
+        _ => $"{r.HostName,-48} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}",
+      });
     }
+  }
 
-    private static async Task RunCollectAsync(int intervalSeconds, string dbPath)
-    {
-        using var store = new TrafficStore(dbPath);
-        var nics = new NicResolver();
-        var hosts = new HostNameCache();
-        var collector = new TrafficCollector(nics, hosts);
+  private static string FormatBytes(long value)
+  {
+    if (value < 0)
+      value = 0;
 
-        Console.WriteLine($"Database: {Path.GetFullPath(dbPath)}");
-        Console.WriteLine($"Sampling every {intervalSeconds}s. Press Ctrl+C to stop.");
-        Console.WriteLine("Note: totals are TCP application data bytes per remote endpoint (not full Ethernet frames). UDP and QUIC-only traffic are not included.");
-
-        using var cts = new CancellationTokenSource();
-        Console.CancelKeyPress += (_, e) =>
-        {
-            e.Cancel = true;
-            cts.Cancel();
-        };
-
-        while (!cts.IsCancellationRequested)
-        {
-            try
-            {
-                var deltas = collector.CollectDeltas();
-                store.ApplyDeltas(deltas);
-                var ts = DateTime.Now.ToString("T");
-                var sum = deltas.Sum(d => d.DeltaSent + d.DeltaReceived);
-                Console.WriteLine($"[{ts}] connections with new data: {deltas.Count}, interval volume: {FormatBytes(sum)}");
-            }
-            catch (Exception ex)
-            {
-                Console.Error.WriteLine($"Sample failed: {ex.Message}");
-            }
-
-            try
-            {
-                await Task.Delay(TimeSpan.FromSeconds(intervalSeconds), cts.Token);
-            }
-            catch (TaskCanceledException)
-            {
-                break;
-            }
-        }
-    }
-
-    private static void RunReport(string mode, string? filter, string dbPath, int top)
-    {
-        using var store = new TrafficStore(dbPath);
-        var m = mode.Trim().ToLowerInvariant();
-        switch (m)
-        {
-            case "ip":
-                PrintIp(store.ReportByIp(filter), top);
-                break;
-            case "nic":
-                PrintNic(store.ReportByNic(filter), top);
-                break;
-            case "host":
-            case "website":
-            case "site":
-                PrintHost(store.ReportByHost(filter), top);
-                break;
-            default:
-                Console.Error.WriteLine("mode must be one of: ip, nic, host");
-                Environment.ExitCode = 1;
-                break;
-        }
-    }
-
-    private static void PrintIp(IReadOnlyList<IpReportRow> rows, int top)
-    {
-        Console.WriteLine($"{"IP",-40} {"Sent",12} {"Recv",12} {"Total",12}");
-        foreach (var r in rows.Take(top))
-            Console.WriteLine($"{r.RemoteIp,-40} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
-    }
-
-    private static void PrintNic(IReadOnlyList<NicReportRow> rows, int top)
-    {
-        Console.WriteLine($"{"NIC",-32} {"Sent",12} {"Recv",12} {"Total",12}");
-        foreach (var r in rows.Take(top))
-            Console.WriteLine($"{r.NicName,-32} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
-    }
-
-    private static void PrintHost(IReadOnlyList<HostReportRow> rows, int top)
-    {
-        Console.WriteLine($"{"Host / site",-48} {"Sent",12} {"Recv",12} {"Total",12}");
-        foreach (var r in rows.Take(top))
-            Console.WriteLine($"{r.HostName,-48} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
-    }
-
-    private static string FormatBytes(long value)
-    {
-        if (value < 0)
-            value = 0;
-
-        const double k = 1024d;
-        if (value < k)
-            return $"{value} B";
-        if (value < k * k)
-            return $"{value / k:0.##} KB";
-        if (value < k * k * k)
-            return $"{value / (k * k):0.##} MB";
-        if (value < k * k * k * k)
-            return $"{value / (k * k * k):0.##} GB";
-        return $"{value / (k * k * k * k):0.##} TB";
-    }
+    const double k = 1024d;
+    if (value < k)
+      return $"{value} B";
+    if (value < k * k)
+      return $"{value / k:0.##} KB";
+    if (value < k * k * k)
+      return $"{value / (k * k):0.##} MB";
+    if (value < k * k * k * k)
+      return $"{value / (k * k * k):0.##} GB";
+    return $"{value / (k * k * k * k):0.##} TB";
+  }
 }
