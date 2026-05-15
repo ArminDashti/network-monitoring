@@ -1,3 +1,4 @@
+#if WINDOWS
 using System.Buffers.Binary;
 using System.Net;
 using System.Runtime.InteropServices;
@@ -335,3 +336,4 @@ internal readonly record struct Tcp6ConnectionSnapshot(
     uint OwningPid,
     ulong DataBytesOut,
     ulong DataBytesIn);
+#endif
