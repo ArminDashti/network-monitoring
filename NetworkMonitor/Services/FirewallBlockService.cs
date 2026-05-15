@@ -98,7 +98,7 @@ internal static class FirewallBlockService
             return false;
         }
 
-        var remoteIpArg = string.Join(",", ips.Select(EscapeRemoteIpForNetsh));
+        var remoteIpArg = string.Join(",", ips.Select(ip => EscapeRemoteIpForNetsh(ip.ToString())));
         var ruleName = $"{RuleNamePrefix}-url-{SanitizeRuleToken(host)}-{Guid.NewGuid():N}";
         ruleName = ruleName.Length > 200 ? ruleName[..200] : ruleName;
 
