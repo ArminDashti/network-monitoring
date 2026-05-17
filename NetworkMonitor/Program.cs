@@ -12,6 +12,17 @@ internal enum UsageMetric
   Upload,
 }
 
+internal readonly record struct RtUsageRow(
+  string AppName,
+  long CurrentDownBytes,
+  long CurrentUpBytes,
+  long DailyDownBytes,
+  long DailyUpBytes,
+  long WeeklyDownBytes,
+  long WeeklyUpBytes,
+  long MonthlyDownBytes,
+  long MonthlyUpBytes);
+
 internal static class Program
 {
   private static readonly string DefaultDbPath = Path.Combine(
@@ -64,11 +75,18 @@ internal static class Program
       appsList,
     };
 
+    var rt = new Command("rt", "Real-time usage table by app with daily/weekly/monthly totals")
+    {
+      dbOption,
+    };
+    rt.SetHandler(RunRealtime, dbOption);
+
     var root = new RootCommand("Windows TCP usage monitor (netm)")
     {
       info,
       usage,
       apps,
+      rt,
     };
 
     return await root.InvokeAsync(args);
@@ -177,6 +195,62 @@ internal static class Program
         PrintTotals(totals, metric);
         break;
     }
+  }
+
+  private static void RunRealtime(string dbPath)
+  {
+    var nowLocal = DateTime.Now;
+    var dailyStartLocal = nowLocal.Date;
+    var weeklyStartLocal = StartOfCurrentWeekSaturday(nowLocal);
+    var monthlyStartLocal = new DateTime(nowLocal.Year, nowLocal.Month, 1, 0, 0, 0, DateTimeKind.Local);
+
+    var nowUtc = nowLocal.ToUniversalTime().ToString("O");
+    var dailyUtc = dailyStartLocal.ToUniversalTime().ToString("O");
+    var weeklyUtc = weeklyStartLocal.ToUniversalTime().ToString("O");
+    var monthlyUtc = monthlyStartLocal.ToUniversalTime().ToString("O");
+
+    using var store = new TrafficStore(dbPath);
+    var currentRows = store.UsageByAppInRangeUtc(nowUtc, nowUtc, includePrivate: true)
+      .ToDictionary(x => NormalizeAppName(x.AppName), x => x, StringComparer.OrdinalIgnoreCase);
+    var dailyRows = store.UsageByAppInRangeUtc(dailyUtc, nowUtc, includePrivate: true)
+      .ToDictionary(x => NormalizeAppName(x.AppName), x => x, StringComparer.OrdinalIgnoreCase);
+    var weeklyRows = store.UsageByAppInRangeUtc(weeklyUtc, nowUtc, includePrivate: true)
+      .ToDictionary(x => NormalizeAppName(x.AppName), x => x, StringComparer.OrdinalIgnoreCase);
+    var monthlyRows = store.UsageByAppInRangeUtc(monthlyUtc, nowUtc, includePrivate: true)
+      .ToDictionary(x => NormalizeAppName(x.AppName), x => x, StringComparer.OrdinalIgnoreCase);
+
+    var apps = currentRows.Keys
+      .Concat(dailyRows.Keys)
+      .Concat(weeklyRows.Keys)
+      .Concat(monthlyRows.Keys)
+      .Distinct(StringComparer.OrdinalIgnoreCase)
+      .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
+      .ToList();
+
+    var rows = new List<RtUsageRow>();
+    foreach (var app in apps)
+    {
+      currentRows.TryGetValue(app, out var current);
+      dailyRows.TryGetValue(app, out var daily);
+      weeklyRows.TryGetValue(app, out var weekly);
+      monthlyRows.TryGetValue(app, out var monthly);
+
+      rows.Add(new RtUsageRow(
+        app,
+        current.BytesReceived,
+        current.BytesSent,
+        daily.BytesReceived,
+        daily.BytesSent,
+        weekly.BytesReceived,
+        weekly.BytesSent,
+        monthly.BytesReceived,
+        monthly.BytesSent));
+    }
+
+    Console.WriteLine($"Daily:   {dailyStartLocal:yyyy-MM-dd HH:mm:ss} local -> {nowLocal:yyyy-MM-dd HH:mm:ss} local");
+    Console.WriteLine($"Weekly:  {weeklyStartLocal:yyyy-MM-dd HH:mm:ss} local -> {nowLocal:yyyy-MM-dd HH:mm:ss} local");
+    Console.WriteLine($"Monthly: {monthlyStartLocal:yyyy-MM-dd HH:mm:ss} local -> {nowLocal:yyyy-MM-dd HH:mm:ss} local");
+    PrintRealtimeRows(rows);
   }
 
   private static bool ParseIncludePrivate(string raw)
@@ -300,4 +374,40 @@ internal static class Program
       return $"{value / (k * k * k):0.##} GB";
     return $"{value / (k * k * k * k):0.##} TB";
   }
+
+  private static DateTime StartOfCurrentWeekSaturday(DateTime localNow)
+  {
+    var date = localNow.Date;
+    while (date.DayOfWeek != DayOfWeek.Saturday)
+      date = date.AddDays(-1);
+    return DateTime.SpecifyKind(date, DateTimeKind.Local);
+  }
+
+  private static string NormalizeAppName(string appName)
+  {
+    var name = Path.GetFileName(appName);
+    var dot = name.LastIndexOf('.');
+    return dot > 0 ? name[..dot] : name;
+  }
+
+  private static void PrintRealtimeRows(IReadOnlyList<RtUsageRow> rows)
+  {
+    const string red = "\u001b[31m";
+    const string green = "\u001b[32m";
+    const string reset = "\u001b[0m";
+
+    Console.WriteLine();
+    Console.WriteLine($"{"App",-24} {"Download",10} {"Upload",10} {"Daily",22} {"Weekly",22} {"Monthly",22}");
+    foreach (var row in rows)
+    {
+      var daily = $"{green}{FormatGb(row.DailyDownBytes)}{reset}/{red}{FormatGb(row.DailyUpBytes)}{reset}";
+      var weekly = $"{green}{FormatGb(row.WeeklyDownBytes)}{reset}/{red}{FormatGb(row.WeeklyUpBytes)}{reset}";
+      var monthly = $"{green}{FormatGb(row.MonthlyDownBytes)}{reset}/{red}{FormatGb(row.MonthlyUpBytes)}{reset}";
+      Console.WriteLine($"{row.AppName,-24} {FormatMb(row.CurrentDownBytes),10} {FormatMb(row.CurrentUpBytes),10} {daily,22} {weekly,22} {monthly,22}");
+    }
+  }
+
+  private static string FormatMb(long bytes) => $"{bytes / (1024d * 1024d):0.##}";
+
+  private static string FormatGb(long bytes) => $"{bytes / (1024d * 1024d * 1024d):0.##}";
 }
