@@ -2,6 +2,51 @@
 
 A **Windows** console application that tracks **TCP** network usage over time: which applications send and receive data, which remote IPs and hostnames they talk to, and which network adapter (NIC) carries the traffic. Samples are stored in a local **SQLite** database so you can query totals and time ranges without keeping a collector running.
 
+## Installation
+
+### From GitHub Releases (Recommended)
+
+Download and run the installer script from an elevated PowerShell terminal:
+
+```powershell
+# Install latest version to %LocalAppData%\NetM with configs.toml
+iwr -useb https://raw.githubusercontent.com/OWNER/NetworkMonitor/main/install.ps1 | iex
+
+# Install specific version
+iwr -useb https://raw.githubusercontent.com/OWNER/NetworkMonitor/main/install.ps1 | iex -Args "-Version v1.0.0"
+
+# Install and add to PATH, set NETM_HOME environment variable
+iwr -useb https://raw.githubusercontent.com/OWNER/NetworkMonitor/main/install.ps1 | iex -Args "-SetEnvVars"
+```
+
+The installer will:
+- Create `%LocalAppData%\NetM` folder
+- Download `netm.exe` to that folder
+- Download `sqlite3.exe` (SQLite CLI tool) to that folder
+- Create a default `configs.toml` configuration file
+- Optionally add the folder to your PATH and set `NETM_HOME` environment variable
+
+After installation with `-SetEnvVars`, you can use:
+- `netm` command directly in PowerShell
+- `sqlite3.exe` to manage the database directly
+- `$env:NETM_HOME` to access the installation directory
+
+### Build from Source
+
+```powershell
+# Clone and build from source
+iwr -useb https://raw.githubusercontent.com/OWNER/NetworkMonitor/main/install.ps1 | iex -Args "-BuildFromSource"
+
+# Build from source and configure environment variables
+iwr -useb https://raw.githubusercontent.com/OWNER/NetworkMonitor/main/install.ps1 | iex -Args "-BuildFromSource", "-SetEnvVars"
+```
+
+### Manual Installation
+
+1. Download the latest release from [GitHub Releases](https://github.com/OWNER/NetworkMonitor/releases)
+2. Extract `netm.exe` and `configs.toml` to `%LocalAppData%\NetM`
+3. Optionally add the installation directory to your PATH and set `NETM_HOME` environment variable
+
 ## Commands
 
 Only these subcommands are exposed:
@@ -22,7 +67,7 @@ Only these subcommands are exposed:
 | `--from-datetime` | today `T0000` | Range start (local) |
 | `--to-datetime` | now | Range end (local), inclusive |
 | `--include-private` | `no` | `yes` to include RFC1918/link-local traffic |
-| `--db` / `-d` | `%LocalAppData%\NetworkMonitor\traffic.db` | SQLite path |
+| `--db` / `-d` | `%LocalAppData%\NetM\traffic.db` or custom path | SQLite path |
 
 ### Datetime format
 
@@ -66,7 +111,7 @@ netm apps list --filter=edge
 
 ## Data collection
 
-Traffic must be recorded into the SQLite database before `usage` or `apps list` return data. Collection uses the same TCP/IP Helper pipeline as before (`TrafficCollector` writing minute buckets). Run your collector process or integration that populates `%LocalAppData%\NetworkMonitor\traffic.db` (or a custom `--db` path).
+Traffic must be recorded into the SQLite database before `usage` or `apps list` return data. Collection uses the same TCP/IP Helper pipeline as before (`TrafficCollector` writing minute buckets). Run your collector process or integration that populates `%LocalAppData%\NetM\traffic.db` (or a custom `--db` path).
 
 ## Requirements
 
