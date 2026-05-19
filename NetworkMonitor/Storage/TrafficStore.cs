@@ -96,7 +96,7 @@ internal sealed class TrafficStore : IDisposable
             SELECT COALESCE(SUM(bytes_sent), 0), COALESCE(SUM(bytes_received), 0)
             FROM usage
             WHERE minute_utc >= $from AND minute_utc <= $to
-            """ + QueryFilters.PrivateIpExcludeClause(includePrivate) + QueryFilters.TargetClause(target.Kind, target.Value);
+            """ + QueryFilters.PrivateIpExcludeClause(includePrivate) + " " + QueryFilters.TargetClause(target.Kind, target.Value);
         AddRangeAndTargetParams(cmd, fromUtcInclusive, toUtcInclusive, target);
         using var r = cmd.ExecuteReader();
         r.Read();
