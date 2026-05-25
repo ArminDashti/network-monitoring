@@ -114,7 +114,7 @@ internal static class IpHelperApi
     }
 
     [StructLayout(LayoutKind.Sequential, Pack = 8)]
-    public struct TcpEstatsDataRodV0
+    public struct TcpEstatsDataRodV0 // Rod = Raw Offload Data. This struct contains statistics for TCP connections that use raw offload.
     {
         public ulong DataBytesOut;
         public ulong DataBytesIn;

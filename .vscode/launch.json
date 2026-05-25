@@ -1,0 +1,16 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Launch NetworkMonitor",
+      "type": "coreclr",
+      "request": "launch",
+      "preLaunchTask": "build NetworkMonitor",
+      "program": "${workspaceFolder}/NetworkMonitor/bin/Debug/net10.0-windows/netm.dll",
+      "args": [],
+      "cwd": "${workspaceFolder}/NetworkMonitor",
+      "console": "integratedTerminal",
+      "stopAtEntry": false
+    }
+  ]
+}

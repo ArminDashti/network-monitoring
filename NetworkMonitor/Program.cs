@@ -32,6 +32,9 @@ internal static class Program
 
   public static async Task<int> Main(string[] args)
   {
+    // Initialize settings and database in current directory on startup
+    SettingsManager.Initialize();
+
     var dbOption = new Option<string>(
       aliases: new[] { "--db", "-d" },
       getDefaultValue: () => DefaultDbPath)
