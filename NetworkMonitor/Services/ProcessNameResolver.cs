@@ -1,4 +1,4 @@
-#if WINDOWS
+using System.Diagnostics.CodeAnalysis;
 using System.Runtime.InteropServices;
 using System.Text;
 
@@ -17,29 +17,43 @@ internal static class ProcessNameResolver
     [DllImport("kernel32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
     private static extern bool QueryFullProcessImageNameW(nint hProcess, int dwFlags, StringBuilder lpExeName, ref int lpdwSize);
 
-    public static string GetAppName(uint pid)
+    /// <summary>
+    /// Returns the full path to the process executable when the handle can be opened.
+    /// </summary>
+    public static bool TryGetExecutablePath(uint pid, [NotNullWhen(true)] out string? executablePath)
     {
+        executablePath = null;
         if (pid == 0)
-            return "system";
+            return false;
 
         var h = OpenProcess(ProcessQueryLimitedInformation, false, (int)pid);
         if (h == nint.Zero)
-            return $"pid-{pid}";
+            return false;
 
         try
         {
-            var sb = new StringBuilder(1024);
+            var sb = new StringBuilder(2048);
             var size = sb.Capacity;
             if (!QueryFullProcessImageNameW(h, 0, sb, ref size))
-                return $"pid-{pid}";
+                return false;
 
-            var path = sb.ToString();
-            return Path.GetFileNameWithoutExtension(path);
+            executablePath = sb.ToString();
+            return executablePath.Length > 0;
         }
         finally
         {
             _ = CloseHandle(h);
         }
     }
+
+    public static string GetAppName(uint pid)
+    {
+        if (pid == 0)
+            return "system";
+
+        if (!TryGetExecutablePath(pid, out var path))
+            return $"pid-{pid}";
+
+        return Path.GetFileNameWithoutExtension(path);
+    }
 }
-#endif

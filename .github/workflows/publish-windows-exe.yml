@@ -14,7 +14,7 @@ on:
       - ".github/workflows/publish-windows-exe.yml"
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: publish-exe-${{ github.workflow }}-${{ github.ref }}
@@ -51,3 +51,12 @@ jobs:
         with:
           name: netm-win-x64
           path: artifacts/publish/netm.exe
+
+      - name: Upload release artifact
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: release-${{ github.sha }}
+          files: artifacts/publish/netm.exe
+          fail_on_unmatched_files: true
+          generate_release_notes: true
