@@ -1,28 +1,27 @@
 using Microsoft.Data.Sqlite;
+using NetworkMonitor.Cli;
 
 namespace NetworkMonitor.Storage;
 
 internal sealed class TrafficStore : IDisposable
 {
-    private readonly SqliteConnection _connection; // Open database connection for all queries
+    private readonly SqliteConnection _connection;
 
-    // Opens or creates the SQLite database and ensures tables exist
     public TrafficStore(string databasePath)
     {
-        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(databasePath)) ?? "."); // Ensure folder exists
+        Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(databasePath)) ?? ".");
         var cs = new SqliteConnectionStringBuilder
         {
             DataSource = databasePath,
             Mode = SqliteOpenMode.ReadWriteCreate,
             Cache = SqliteCacheMode.Shared,
-        }.ToString(); // Build connection string
+        }.ToString();
 
         _connection = new SqliteConnection(cs);
         _connection.Open();
-        InitSchema(); // Create tables on first use
+        InitSchema();
     }
 
-    // Creates usage and meta tables if they are missing
     private void InitSchema()
     {
         var cmd = _connection.CreateCommand();
@@ -51,16 +50,15 @@ internal sealed class TrafficStore : IDisposable
         cmd.ExecuteNonQuery();
     }
 
-    // Adds sampled traffic deltas into the current minute bucket
     public void ApplyDeltas(IReadOnlyList<TrafficDelta> deltas)
     {
-        if (deltas.Count == 0) // Nothing to write
+        if (deltas.Count == 0)
             return;
 
         var now = DateTime.UtcNow;
-        var minuteUtc = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0, DateTimeKind.Utc).ToString("yyyy-MM-ddTHH:mm:00Z"); // Bucket key
+        var minuteUtc = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0, DateTimeKind.Utc).ToString("yyyy-MM-ddTHH:mm:00Z");
         
-        using var tx = _connection.BeginTransaction(); // One transaction for the whole batch
+        using var tx = _connection.BeginTransaction();
         foreach (var d in deltas)
         {
             using var cmd = _connection.CreateCommand();
@@ -81,29 +79,34 @@ internal sealed class TrafficStore : IDisposable
             cmd.Parameters.AddWithValue("$host", d.HostName);
             cmd.Parameters.AddWithValue("$up", d.DeltaSent);
             cmd.Parameters.AddWithValue("$down", d.DeltaReceived);
-            cmd.ExecuteNonQuery(); // Upsert one delta row
+            cmd.ExecuteNonQuery();
         }
 
-        tx.Commit(); // Persist all deltas together
+        tx.Commit();
     }
 
-    // Sums upload and download bytes in a UTC time range, optionally filtered by app
-    public UsageTotalsRow UsageTotalsInRangeUtc(string fromUtcInclusive, string toUtcInclusive, string? appNameOrAll)
+    public UsageTotalsRow UsageTotalsInRangeUtc(
+        string fromUtcInclusive,
+        string toUtcInclusive,
+        UsageTarget target,
+        bool includePrivate)
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = """
             SELECT COALESCE(SUM(bytes_sent), 0), COALESCE(SUM(bytes_received), 0)
             FROM usage
             WHERE minute_utc >= $from AND minute_utc <= $to
-            """ + AppFilterClause(appNameOrAll, "AND ");
-        AddRangeParams(cmd, fromUtcInclusive, toUtcInclusive, appNameOrAll);
+            """ + QueryFilters.PrivateIpExcludeClause(includePrivate) + QueryFilters.TargetClause(target.Kind, target.Value);
+        AddRangeAndTargetParams(cmd, fromUtcInclusive, toUtcInclusive, target);
         using var r = cmd.ExecuteReader();
         r.Read();
         return new UsageTotalsRow(r.GetInt64(0), r.GetInt64(1));
     }
 
-    // Groups traffic by application name within a UTC time range
-    public IReadOnlyList<AppUsageRow> UsageByAppInRangeUtc(string fromUtcInclusive, string toUtcInclusive, string? appNameOrAll)
+    public IReadOnlyList<AppUsageRow> UsageByAppInRangeUtc(
+        string fromUtcInclusive,
+        string toUtcInclusive,
+        bool includePrivate)
     {
         using var cmd = _connection.CreateCommand();
         cmd.CommandText = """
@@ -112,54 +115,133 @@ internal sealed class TrafficStore : IDisposable
                    COALESCE(SUM(bytes_received), 0) AS down
             FROM usage
             WHERE minute_utc >= $from AND minute_utc <= $to
-            """ + AppFilterClause(appNameOrAll, "AND ") + """
+            """ + QueryFilters.PrivateIpExcludeClause(includePrivate) + """
             GROUP BY app_name
             ORDER BY (up + down) DESC;
             """;
-        AddRangeParams(cmd, fromUtcInclusive, toUtcInclusive, appNameOrAll);
+        cmd.Parameters.AddWithValue("$from", fromUtcInclusive);
+        cmd.Parameters.AddWithValue("$to", toUtcInclusive);
         return ReadAppUsageRows(cmd);
     }
 
-    // Groups traffic by remote IP within a UTC time range
-    public IReadOnlyList<IpUsageRow> UsageByIpInRangeUtc(string fromUtcInclusive, string toUtcInclusive, string? appNameOrAll)
+    public IReadOnlyList<IpUsageRow> UsageByIpInRangeUtc(
+        string fromUtcInclusive,
+        string toUtcInclusive,
+        bool includePrivate,
+        int? limit = null)
     {
         using var cmd = _connection.CreateCommand();
+        var limitClause = limit is null ? "" : $" LIMIT {limit.Value}";
         cmd.CommandText = """
             SELECT remote_ip,
                    COALESCE(SUM(bytes_sent), 0) AS up,
                    COALESCE(SUM(bytes_received), 0) AS down
             FROM usage
             WHERE minute_utc >= $from AND minute_utc <= $to
-            """ + AppFilterClause(appNameOrAll, "AND ") + """
+            """ + QueryFilters.PrivateIpExcludeClause(includePrivate) + """
             GROUP BY remote_ip
-            ORDER BY (up + down) DESC;
-            """;
-        AddRangeParams(cmd, fromUtcInclusive, toUtcInclusive, appNameOrAll);
+            ORDER BY (up + down) DESC
+            """ + limitClause + ";";
+        cmd.Parameters.AddWithValue("$from", fromUtcInclusive);
+        cmd.Parameters.AddWithValue("$to", toUtcInclusive);
         return ReadIpUsageRows(cmd);
     }
 
-    // Builds optional SQL filter for a single app name
-    private static string AppFilterClause(string? appNameOrAll, string prefix)
+    public IReadOnlyList<HostUsageRow> UsageByHostInRangeUtc(
+        string fromUtcInclusive,
+        string toUtcInclusive,
+        bool includePrivate,
+        int? limit = null)
     {
-        if (appNameOrAll is null || IsAppAll(appNameOrAll)) // No app filter
-            return "";
-        return $"{prefix}app_name = $app\n";
+        using var cmd = _connection.CreateCommand();
+        var limitClause = limit is null ? "" : $" LIMIT {limit.Value}";
+        cmd.CommandText = """
+            SELECT host_name,
+                   COALESCE(SUM(bytes_sent), 0) AS up,
+                   COALESCE(SUM(bytes_received), 0) AS down
+            FROM usage
+            WHERE minute_utc >= $from AND minute_utc <= $to
+            """ + QueryFilters.PrivateIpExcludeClause(includePrivate) + """
+            GROUP BY host_name
+            ORDER BY (up + down) DESC
+            """ + limitClause + ";";
+        cmd.Parameters.AddWithValue("$from", fromUtcInclusive);
+        cmd.Parameters.AddWithValue("$to", toUtcInclusive);
+        return ReadHostUsageRows(cmd);
     }
 
-    // Binds from, to, and optional app parameters on a command
-    private static void AddRangeParams(SqliteCommand cmd, string fromUtc, string toUtc, string? appNameOrAll)
+    public IReadOnlyList<string> ListAppNames(string? filter)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = filter is null
+            ? """
+              SELECT DISTINCT app_name
+              FROM usage
+              ORDER BY app_name COLLATE NOCASE;
+              """
+            : """
+              SELECT DISTINCT app_name
+              FROM usage
+              WHERE app_name LIKE $filter
+              ORDER BY app_name COLLATE NOCASE;
+              """;
+        if (filter is not null)
+            cmd.Parameters.AddWithValue("$filter", $"%{filter}%");
+
+        var list = new List<string>();
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            list.Add(r.GetString(0));
+        return list;
+    }
+
+    public DatabaseInfoRow GetDatabaseInfo(string databasePath)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            SELECT COUNT(*),
+                   MIN(minute_utc),
+                   MAX(minute_utc),
+                   COUNT(DISTINCT app_name)
+            FROM usage;
+            """;
+        using var r = cmd.ExecuteReader();
+        r.Read();
+        var rowCount = r.IsDBNull(0) ? 0L : r.GetInt64(0);
+        var firstMinute = r.IsDBNull(1) ? null : r.GetString(1);
+        var lastMinute = r.IsDBNull(2) ? null : r.GetString(2);
+        var appCount = r.IsDBNull(3) ? 0L : r.GetInt64(3);
+
+        long fileBytes = 0;
+        try
+        {
+            if (File.Exists(databasePath))
+                fileBytes = new FileInfo(databasePath).Length;
+        }
+        catch
+        {
+            // Ignore file stat errors.
+        }
+
+        return new DatabaseInfoRow(databasePath, rowCount, firstMinute, lastMinute, appCount, fileBytes);
+    }
+
+    private static void AddRangeAndTargetParams(SqliteCommand cmd, string fromUtc, string toUtc, UsageTarget target)
     {
         cmd.Parameters.AddWithValue("$from", fromUtc);
         cmd.Parameters.AddWithValue("$to", toUtc);
-        if (appNameOrAll is not null && !IsAppAll(appNameOrAll))
-            cmd.Parameters.AddWithValue("$app", appNameOrAll);
+        QueryFilters.AddTargetParameters(cmd, target.Kind, target.Value);
     }
 
-    // True when the app filter means every application
-    private static bool IsAppAll(string app) =>
-        app.Equals("all", StringComparison.OrdinalIgnoreCase);
+    private static List<HostUsageRow> ReadHostUsageRows(SqliteCommand cmd)
+    {
+        var list = new List<HostUsageRow>();
+        using var r = cmd.ExecuteReader();
+        while (r.Read())
+            list.Add(new HostUsageRow(r.GetString(0), r.GetInt64(1), r.GetInt64(2)));
+        return list;
+    }
 
-    // Reads grouped app usage rows from a executed command
     private static List<AppUsageRow> ReadAppUsageRows(SqliteCommand cmd)
     {
         var list = new List<AppUsageRow>();
@@ -169,7 +251,6 @@ internal sealed class TrafficStore : IDisposable
         return list;
     }
 
-    // Reads grouped IP usage rows from a executed command
     private static List<IpUsageRow> ReadIpUsageRows(SqliteCommand cmd)
     {
         var list = new List<IpUsageRow>();
@@ -179,7 +260,6 @@ internal sealed class TrafficStore : IDisposable
         return list;
     }
 
-    // Lifetime totals grouped by remote IP, with optional exact IP filter
     public IReadOnlyList<IpReportRow> ReportByIp(string? filterIp = null)
     {
         using var cmd = _connection.CreateCommand();
@@ -206,7 +286,6 @@ internal sealed class TrafficStore : IDisposable
         return ReadIpRows(cmd);
     }
 
-    // Lifetime totals grouped by network interface name
     public IReadOnlyList<NicReportRow> ReportByNic(string? filterNic = null)
     {
         using var cmd = _connection.CreateCommand();
@@ -233,7 +312,6 @@ internal sealed class TrafficStore : IDisposable
         return ReadNicRows(cmd);
     }
 
-    // Lifetime totals grouped by host name, with optional substring filter
     public IReadOnlyList<HostReportRow> ReportByHost(string? filterHost = null)
     {
         using var cmd = _connection.CreateCommand();
@@ -260,7 +338,6 @@ internal sealed class TrafficStore : IDisposable
         return ReadHostRows(cmd);
     }
 
-    // Maps SQL reader rows to IP report records
     private static List<IpReportRow> ReadIpRows(SqliteCommand cmd)
     {
         var list = new List<IpReportRow>();
@@ -276,7 +353,6 @@ internal sealed class TrafficStore : IDisposable
         return list;
     }
 
-    // Maps SQL reader rows to NIC report records
     private static List<NicReportRow> ReadNicRows(SqliteCommand cmd)
     {
         var list = new List<NicReportRow>();
@@ -292,7 +368,6 @@ internal sealed class TrafficStore : IDisposable
         return list;
     }
 
-    // Maps SQL reader rows to host report records
     private static List<HostReportRow> ReadHostRows(SqliteCommand cmd)
     {
         var list = new List<HostReportRow>();
@@ -308,7 +383,6 @@ internal sealed class TrafficStore : IDisposable
         return list;
     }
 
-    // Closes the database connection
     public void Dispose() => _connection.Dispose();
 }
 
@@ -332,3 +406,13 @@ internal readonly record struct UsageTotalsRow(long BytesSent, long BytesReceive
 internal readonly record struct AppUsageRow(string AppName, long BytesSent, long BytesReceived);
 
 internal readonly record struct IpUsageRow(string RemoteIp, long BytesSent, long BytesReceived);
+
+internal readonly record struct HostUsageRow(string HostName, long BytesSent, long BytesReceived);
+
+internal readonly record struct DatabaseInfoRow(
+    string DatabasePath,
+    long RowCount,
+    string? FirstMinuteUtc,
+    string? LastMinuteUtc,
+    long DistinctAppCount,
+    long FileBytes);
