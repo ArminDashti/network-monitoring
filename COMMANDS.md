@@ -11,6 +11,7 @@ This file provides a quick reference for the `netm` CLI commands.
 | `netm usage download` | Show only download (received) bytes for the selected time window. |
 | `netm usage upload` | Show only upload (sent) bytes for the selected time window. |
 | `netm apps list` | List application names observed in the traffic database. |
+| `netm rt` | Show per-app real-time table with download/upload plus daily, weekly, and monthly totals. |
 
 ## Common Options
 
@@ -31,4 +32,5 @@ netm usage --target=apps --from-datetime=260515T0900
 netm usage download --target=ip --include-private=no
 netm usage upload --target=telegram --from-datetime=260514T0000
 netm apps list --filter=edge
+netm rt
 ```
