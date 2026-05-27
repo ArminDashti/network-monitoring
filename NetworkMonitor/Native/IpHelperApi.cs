@@ -14,6 +14,19 @@ internal static class IpHelperApi
 
     public const int TcpConnectionEstatsData = 1; // Ask for per-connection data byte statistics
 
+    private static readonly Lazy<bool> Tcp6ApisAvailable = new(DetectTcp6Apis);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> Tcp4CollectionEnabled = new(StringComparer.Ordinal);
+    private static readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> Tcp6CollectionEnabled = new(StringComparer.Ordinal);
+
+    private static bool DetectTcp6Apis()
+    {
+        if (!NativeLibrary.TryLoad("iphlpapi.dll", out var handle))
+            return false;
+
+        return NativeLibrary.TryGetExport(handle, "GetExtendedTcp6Table", out _)
+            && NativeLibrary.TryGetExport(handle, "GetPerTcp6ConnectionEStats", out _);
+    }
+
     // Loads the extended IPv4 TCP table from iphlpapi.dll
     [DllImport("iphlpapi.dll", SetLastError = true)]
     public static extern uint GetExtendedTcpTable(
@@ -24,15 +37,30 @@ internal static class IpHelperApi
         int tableClass,
         uint reserved = 0);
 
-    // Reads data-byte counters for one IPv4 TCP connection
+    // Enables or disables extended statistics for one IPv4 TCP connection
     [DllImport("iphlpapi.dll", SetLastError = true)]
-    public static extern uint GetPerTcpConnectionEStats(
+    private static extern uint SetPerTcpConnectionEStats(
         ref MibTcpRow row,
         int estatsType,
         nint rw,
         uint rwVersion,
         uint rwSize,
         uint offset);
+
+    // Reads extended statistics for one IPv4 TCP connection
+    [DllImport("iphlpapi.dll", SetLastError = true)]
+    private static extern uint GetPerTcpConnectionEStats(
+        ref MibTcpRow row,
+        int estatsType,
+        nint rw,
+        uint rwVersion,
+        uint rwSize,
+        nint ros,
+        uint rosVersion,
+        uint rosSize,
+        nint rod,
+        uint rodVersion,
+        uint rodSize);
 
     // Loads the extended IPv6 TCP table from iphlpapi.dll
     [DllImport("iphlpapi.dll", SetLastError = true)]
@@ -44,15 +72,30 @@ internal static class IpHelperApi
         int tableClass,
         uint reserved = 0);
 
-    // Reads data-byte counters for one IPv6 TCP connection
+    // Enables or disables extended statistics for one IPv6 TCP connection
     [DllImport("iphlpapi.dll", SetLastError = true)]
-    public static extern uint GetPerTcp6ConnectionEStats(
+    private static extern uint SetPerTcp6ConnectionEStats(
         ref MibTcp6Row row,
         int estatsType,
         nint rw,
         uint rwVersion,
         uint rwSize,
         uint offset);
+
+    // Reads extended statistics for one IPv6 TCP connection
+    [DllImport("iphlpapi.dll", SetLastError = true)]
+    private static extern uint GetPerTcp6ConnectionEStats(
+        ref MibTcp6Row row,
+        int estatsType,
+        nint rw,
+        uint rwVersion,
+        uint rwSize,
+        nint ros,
+        uint rosVersion,
+        uint rosSize,
+        nint rod,
+        uint rodVersion,
+        uint rodSize);
 
     // Windows layout for a basic IPv4 TCP row
     [StructLayout(LayoutKind.Sequential)]
@@ -123,46 +166,32 @@ internal static class IpHelperApi
         public uint OwningPid;
     }
 
-    // Windows layout for TCP data statistics returned by eStats APIs
-    [StructLayout(LayoutKind.Sequential, Pack = 8)]
-    public struct TcpEstatsDataRodV0 // Rod = Raw Offload Data. This struct contains statistics for TCP connections that use raw offload.
+    // Read/write configuration for TCP data eStats (enable collection)
+    [StructLayout(LayoutKind.Sequential)]
+    private struct TcpEstatsDataRwV0
+    {
+        [MarshalAs(UnmanagedType.U1)]
+        public byte EnableCollection;
+    }
+
+    // Windows TCP_ESTATS_DATA_ROD_v0 (tcpestats.h)
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TcpEstatsDataRodV0
     {
         public ulong DataBytesOut;
-        public ulong DataBytesIn;
         public ulong DataSegsOut;
+        public ulong DataBytesIn;
         public ulong DataSegsIn;
-        public uint OutRsts;
-        public uint MaxDataSegsOut;
-        public uint MaxDataSegsIn;
-        public uint SumDataSegsOut;
-        public uint SumDataSegsIn;
-        public uint MaxRwin;
-        public uint MaxSwin;
-        public uint MaxMss;
-        public uint MinMss;
-        public uint SumRwin;
-        public uint SumSwin;
-        public uint FastRexmit;
-        public uint FastRecover;
-        public uint FastTransmit;
-        public uint DataTxCong;
-        public uint PktsRetrans;
-        public uint SlowStart;
-        public uint CongAvoid;
-        public uint OtherReductions;
-        public uint CongOverAvgCount;
-        public uint LimRwin;
-        public uint LimSwin;
-        public uint LimMss;
-        public uint LimDataSize;
-        public uint LimSndUna;
-        public uint LimSndNxt;
-        public uint LimCwnd;
-        public uint LimSsthresh;
-        public uint LimRwinScalePre;
-        public uint LimRwinScalePost;
-        public uint LimRtt;
-        public uint LimMssPost;
+        public ulong SegsOut;
+        public ulong SegsIn;
+        public uint SoftErrors;
+        public uint SoftErrorReason;
+        public uint SndUna;
+        public uint SndNxt;
+        public uint SndMax;
+        public ulong ThruBytesAcked;
+        public uint RcvNxt;
+        public ulong ThruBytesReceived;
     }
 
     // Converts a Windows network-order port field to host ushort
@@ -180,23 +209,109 @@ internal static class IpHelperApi
         return new IPAddress(bytes);
     }
 
+    // Writes eStats API diagnostics to stdout (NETM_DEBUG=1).
+    public static void PrintStatsDiagnostics()
+    {
+        const uint established = 5;
+        Console.WriteLine($"TcpEstatsDataRodV0 size: {Marshal.SizeOf<TcpEstatsDataRodV0>()} bytes");
+        Console.WriteLine($"TcpEstatsDataRwV0 size:   {Marshal.SizeOf<TcpEstatsDataRwV0>()} bytes");
+        Console.WriteLine($"EnumerateTcp4Connections: {EnumerateTcp4Connections().Count}");
+
+        var size = 0;
+        _ = GetExtendedTcpTable(nint.Zero, ref size, true, AfInet, TcpTableOwnerPidAll);
+        if (size <= 0)
+            return;
+
+        var buffer = Marshal.AllocHGlobal(size);
+        try
+        {
+            if (GetExtendedTcpTable(buffer, ref size, true, AfInet, TcpTableOwnerPidAll) != 0)
+                return;
+
+            var numEntries = Marshal.ReadInt32(buffer);
+            var rowSize = Marshal.SizeOf<MibTcpRowOwnerPid>();
+            var offset = sizeof(int);
+            for (var i = 0; i < numEntries; i++)
+            {
+                var ptr = IntPtr.Add(buffer, offset + i * rowSize);
+                var owner = Marshal.PtrToStructure<MibTcpRowOwnerPid>(ptr);
+                if (owner.State != established || owner.RemotePort == 0)
+                    continue;
+
+                var mib = new MibTcpRow
+                {
+                    State = owner.State,
+                    LocalAddr = owner.LocalAddr,
+                    LocalPort = owner.LocalPort,
+                    RemoteAddr = owner.RemoteAddr,
+                    RemotePort = owner.RemotePort,
+                };
+
+                var rwSize = (uint)Marshal.SizeOf<TcpEstatsDataRwV0>();
+                var rodSize = (uint)Marshal.SizeOf<TcpEstatsDataRodV0>();
+                var rwSet = Marshal.AllocHGlobal((int)rwSize);
+                var rwGet = Marshal.AllocHGlobal((int)rwSize);
+                var rodBuffer = Marshal.AllocHGlobal((int)rodSize);
+                try
+                {
+                    Marshal.StructureToPtr(new TcpEstatsDataRwV0 { EnableCollection = 1 }, rwSet, false);
+                    var setCode = SetPerTcpConnectionEStats(ref mib, TcpConnectionEstatsData, rwSet, 0, rwSize, 0);
+                    var getFull = GetPerTcpConnectionEStats(
+                        ref mib, TcpConnectionEstatsData,
+                        rwGet, 0, rwSize, nint.Zero, 0, 0, rodBuffer, 0, rodSize);
+                    var rw = Marshal.PtrToStructure<TcpEstatsDataRwV0>(rwGet);
+                    var rod = Marshal.PtrToStructure<TcpEstatsDataRodV0>(rodBuffer);
+                    Console.WriteLine(
+                        $"Sample row set={setCode} get={getFull} enabled={rw.EnableCollection} out={rod.DataBytesOut} in={rod.DataBytesIn}");
+                }
+                finally
+                {
+                    Marshal.FreeHGlobal(rwSet);
+                    Marshal.FreeHGlobal(rwGet);
+                    Marshal.FreeHGlobal(rodBuffer);
+                }
+
+                return;
+            }
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
     // Tries to read IPv4 TCP data byte counters for one connection row
     public static bool TryGetTcp4DataStats(ref MibTcpRow row, out TcpEstatsDataRodV0 data)
     {
         data = default;
-        var size = (uint)Marshal.SizeOf<TcpEstatsDataRodV0>(); // Size of the stats struct
-        var buffer = Marshal.AllocHGlobal((int)size); // Unmanaged buffer for the API
+        TryEnableTcp4DataCollection(ref row);
+
+        var rwSize = (uint)Marshal.SizeOf<TcpEstatsDataRwV0>();
+        var rodSize = (uint)Marshal.SizeOf<TcpEstatsDataRodV0>();
+        var rwBuffer = Marshal.AllocHGlobal((int)rwSize);
+        var rodBuffer = Marshal.AllocHGlobal((int)rodSize);
         try
         {
-            var code = GetPerTcpConnectionEStats(ref row, TcpConnectionEstatsData, buffer, 0, size, 0); // Call Windows
-            if (code != 0) // Non-zero means the stats call failed
+            var code = GetPerTcpConnectionEStats(
+                ref row,
+                TcpConnectionEstatsData,
+                rwBuffer, 0, rwSize,
+                nint.Zero, 0, 0,
+                rodBuffer, 0, rodSize);
+            if (code != 0)
                 return false;
-            data = Marshal.PtrToStructure<TcpEstatsDataRodV0>(buffer); // Copy stats into managed struct
+
+            var rw = Marshal.PtrToStructure<TcpEstatsDataRwV0>(rwBuffer);
+            if (rw.EnableCollection == 0)
+                return false;
+
+            data = Marshal.PtrToStructure<TcpEstatsDataRodV0>(rodBuffer);
             return true;
         }
         finally
         {
-            Marshal.FreeHGlobal(buffer); // Always free unmanaged memory
+            Marshal.FreeHGlobal(rwBuffer);
+            Marshal.FreeHGlobal(rodBuffer);
         }
     }
 
@@ -204,19 +319,74 @@ internal static class IpHelperApi
     public static bool TryGetTcp6DataStats(ref MibTcp6Row row, out TcpEstatsDataRodV0 data)
     {
         data = default;
-        var size = (uint)Marshal.SizeOf<TcpEstatsDataRodV0>();
-        var buffer = Marshal.AllocHGlobal((int)size);
+        TryEnableTcp6DataCollection(ref row);
+
+        var rwSize = (uint)Marshal.SizeOf<TcpEstatsDataRwV0>();
+        var rodSize = (uint)Marshal.SizeOf<TcpEstatsDataRodV0>();
+        var rwBuffer = Marshal.AllocHGlobal((int)rwSize);
+        var rodBuffer = Marshal.AllocHGlobal((int)rodSize);
         try
         {
-            var code = GetPerTcp6ConnectionEStats(ref row, TcpConnectionEstatsData, buffer, 0, size, 0);
+            var code = GetPerTcp6ConnectionEStats(
+                ref row,
+                TcpConnectionEstatsData,
+                rwBuffer, 0, rwSize,
+                nint.Zero, 0, 0,
+                rodBuffer, 0, rodSize);
             if (code != 0)
                 return false;
-            data = Marshal.PtrToStructure<TcpEstatsDataRodV0>(buffer);
+
+            var rw = Marshal.PtrToStructure<TcpEstatsDataRwV0>(rwBuffer);
+            if (rw.EnableCollection == 0)
+                return false;
+
+            data = Marshal.PtrToStructure<TcpEstatsDataRodV0>(rodBuffer);
             return true;
         }
         finally
         {
-            Marshal.FreeHGlobal(buffer);
+            Marshal.FreeHGlobal(rwBuffer);
+            Marshal.FreeHGlobal(rodBuffer);
+        }
+    }
+
+    private static void TryEnableTcp4DataCollection(ref MibTcpRow row)
+    {
+        var key = $"{row.LocalAddr}:{row.LocalPort}:{row.RemoteAddr}:{row.RemotePort}";
+        if (!Tcp4CollectionEnabled.TryAdd(key, 1))
+            return;
+
+        var rw = new TcpEstatsDataRwV0 { EnableCollection = 1 };
+        var rwSize = (uint)Marshal.SizeOf<TcpEstatsDataRwV0>();
+        var rwBuffer = Marshal.AllocHGlobal((int)rwSize);
+        try
+        {
+            Marshal.StructureToPtr(rw, rwBuffer, false);
+            _ = SetPerTcpConnectionEStats(ref row, TcpConnectionEstatsData, rwBuffer, 0, rwSize, 0);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(rwBuffer);
+        }
+    }
+
+    private static void TryEnableTcp6DataCollection(ref MibTcp6Row row)
+    {
+        var key = $"{row.LocalAddr[0]}:{row.LocalPort}:{row.RemoteAddr[0]}:{row.RemotePort}";
+        if (!Tcp6CollectionEnabled.TryAdd(key, 1))
+            return;
+
+        var rw = new TcpEstatsDataRwV0 { EnableCollection = 1 };
+        var rwSize = (uint)Marshal.SizeOf<TcpEstatsDataRwV0>();
+        var rwBuffer = Marshal.AllocHGlobal((int)rwSize);
+        try
+        {
+            Marshal.StructureToPtr(rw, rwBuffer, false);
+            _ = SetPerTcp6ConnectionEStats(ref row, TcpConnectionEstatsData, rwBuffer, 0, rwSize, 0);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(rwBuffer);
         }
     }
 
@@ -283,6 +453,9 @@ internal static class IpHelperApi
     // Lists all IPv6 TCP connections with byte counters and owning process
     public static List<Tcp6ConnectionSnapshot> EnumerateTcp6Connections()
     {
+        if (!Tcp6ApisAvailable.Value)
+            return [];
+
         var result = new List<Tcp6ConnectionSnapshot>();
         var size = 0;
         _ = GetExtendedTcp6Table(nint.Zero, ref size, true, AfInet6, TcpTableOwnerPidAll);

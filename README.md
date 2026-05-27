@@ -10,13 +10,13 @@ Download and run the installer script from an elevated PowerShell terminal:
 
 ```powershell
 # Install latest version to %LocalAppData%\NetM with configs.toml
-iwr -useb https://raw.githubusercontent.com/OWNER/NetworkMonitor/main/install.ps1 | iex
+iwr -useb https://raw.githubusercontent.com/ArminDashti/network-monitoring/main/install.ps1 | iex
 
 # Install specific version
-iwr -useb https://raw.githubusercontent.com/OWNER/NetworkMonitor/main/install.ps1 | iex -Args "-Version v1.0.0"
+iwr -useb https://raw.githubusercontent.com/ArminDashti/network-monitoring/main/install.ps1 | iex -Args "-Version v1.0.0"
 
 # Install and add to PATH, set NETM_HOME environment variable
-iwr -useb https://raw.githubusercontent.com/OWNER/NetworkMonitor/main/install.ps1 | iex -Args "-SetEnvVars"
+iwr -useb https://raw.githubusercontent.com/ArminDashti/network-monitoring/main/install.ps1 | iex -Args "-SetEnvVars"
 ```
 
 The installer will:
@@ -35,15 +35,15 @@ After installation with `-SetEnvVars`, you can use:
 
 ```powershell
 # Clone and build from source
-iwr -useb https://raw.githubusercontent.com/OWNER/NetworkMonitor/main/install.ps1 | iex -Args "-BuildFromSource"
+iwr -useb https://raw.githubusercontent.com/ArminDashti/network-monitoring/main/install.ps1 | iex -Args "-BuildFromSource"
 
 # Build from source and configure environment variables
-iwr -useb https://raw.githubusercontent.com/OWNER/NetworkMonitor/main/install.ps1 | iex -Args "-BuildFromSource", "-SetEnvVars"
+iwr -useb https://raw.githubusercontent.com/ArminDashti/network-monitoring/main/install.ps1 | iex -Args "-BuildFromSource", "-SetEnvVars"
 ```
 
 ### Manual Installation
 
-1. Download the latest release from [GitHub Releases](https://github.com/OWNER/NetworkMonitor/releases)
+1. Download the latest release from [GitHub Releases](https://github.com/ArminDashti/network-monitoring/releases)
 2. Extract `netm.exe` and `configs.toml` to `%LocalAppData%\NetM`
 3. Optionally add the installation directory to your PATH and set `NETM_HOME` environment variable
 
@@ -53,10 +53,9 @@ Only these subcommands are exposed:
 
 | Command | Purpose |
 |---------|---------|
+| `netm service` | Install/start/stop the NetM Windows service (daemon mode — required for collection) |
 | `netm info` | Database path, row counts, UTC coverage, version |
 | `netm usage` | Upload, download, and total bytes in a time range |
-| `netm usage download` | Download (received) bytes only |
-| `netm usage upload` | Upload (sent) bytes only |
 | `netm apps list` | Application names seen in the database |
 
 ### Options (usage)
@@ -103,20 +102,60 @@ netm info
 netm usage
 netm usage --from-datetime=260515 --to-datetime=260515T2359
 netm usage --target=apps --from-datetime=260515T0900
-netm usage download --target=ip --include-private=no
-netm usage upload --target=telegram --from-datetime=260514T0000
+netm usage --target=ip --include-private=no
+netm usage --target=telegram --from-datetime=260514T0000
 
 netm apps list --filter=edge
 ```
 
-## Data collection
+## Data collection (daemon mode)
 
-Traffic must be recorded into the SQLite database before `usage` or `apps list` return data. Collection uses the same TCP/IP Helper pipeline as before (`TrafficCollector` writing minute buckets). Run your collector process or integration that populates `%LocalAppData%\NetM\traffic.db` (or a custom `--db` path).
+Collection runs only as a **Windows service** in the background (no foreground collector).
+
+```powershell
+# Elevated PowerShell
+netm service install
+netm service start
+netm service status
+```
+
+`install.ps1` installs and starts the service by default when run as Administrator. Use `-SkipService` to install binaries only.
+
+```powershell
+iwr -useb https://raw.githubusercontent.com/ArminDashti/network-monitoring/main/install.ps1 | iex -Args "-SetEnvVars"
+```
+
+Stop or remove the service:
+
+```powershell
+netm service stop
+netm service uninstall
+```
+
+The service runs `netm run` internally. Logs are written to the Windows Event Log (source **NetM**).
+
+Query traffic in any terminal: `netm usage`, `netm apps list`, `netm rt`.
+
+Default database: `%LocalAppData%\NetM\traffic.db` (override with `--db` on `service install` or `NETM_HOME`).
+
+## Quick start (from source)
+
+```powershell
+git clone https://github.com/ArminDashti/network-monitoring.git
+cd network-monitoring
+# Elevated PowerShell for daemon install:
+.\install.ps1 -BuildFromSource -SetEnvVars
+# Restart terminal, then:
+netm service status
+netm info
+netm usage --target=apps
+```
 
 ## Requirements
 
 - **Windows 11** (or compatible Windows with IP Helper ESTATS APIs)
-- **.NET 10** SDK to build from source, or a published **`netm.exe`** artifact
+- **.NET 9** SDK to build from source, or a published **`netm.exe`** artifact
+- **Administrator** (for `netm service install`): the Windows service runs as Local System and can read per-connection TCP byte counters for other processes
 
 ## Limitations
 
@@ -139,7 +178,8 @@ Published **`netm-win-x64`** artifacts are built in CI (`.github/workflows/publi
 
 | Path | Role |
 |------|------|
-| `NetworkMonitor/Program.cs` | CLI (`info`, `usage`, `apps`) |
+| `NetworkMonitor/Program.cs` | CLI (`service`, `info`, `usage`, `apps`, `rt`) |
+| `NetworkMonitor/Services/` | Windows service host and traffic collection |
 | `NetworkMonitor/Cli/` | Target parsing and datetime helpers |
 | `NetworkMonitor/Services/TrafficCollector.cs` | TCP sampling and deltas |
 | `NetworkMonitor/Storage/TrafficStore.cs` | SQLite schema and queries |

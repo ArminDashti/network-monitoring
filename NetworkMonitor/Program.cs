@@ -2,15 +2,11 @@ using System.CommandLine;
 using System.Reflection;
 using NetworkMonitor.Cli;
 using NetworkMonitor.Storage;
+#if WINDOWS
+using NetworkMonitor.Services;
+#endif
 
 namespace NetworkMonitor;
-
-internal enum UsageMetric
-{
-  Total,
-  Download,
-  Upload,
-}
 
 internal readonly record struct RtUsageRow(
   string AppName,
@@ -25,13 +21,30 @@ internal readonly record struct RtUsageRow(
 
 internal static class Program
 {
-  private static readonly string DefaultDbPath = Path.Combine(
-    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-    "NetworkMonitor",
-    "traffic.db");
+  private static string DefaultDbPath => SettingsManager.GetDefaultDatabasePath();
 
   public static async Task<int> Main(string[] args)
   {
+#if WINDOWS
+    if (args.Length > 0 && args[0].Equals("run", StringComparison.OrdinalIgnoreCase))
+      return await ServiceHostRunner.RunAsync(args[1..]);
+
+    if (args.Length > 0 && args[0].Equals("collect", StringComparison.OrdinalIgnoreCase))
+    {
+      Console.Error.WriteLine("Foreground collection is not supported. Use daemon mode:");
+      Console.Error.WriteLine("  netm service install");
+      Console.Error.WriteLine("  netm service start");
+      return 1;
+    }
+
+#else
+    if (args.Length > 0 && args[0].Equals("collect", StringComparison.OrdinalIgnoreCase))
+    {
+      Console.Error.WriteLine("collect requires a Windows build (net9.0-windows / net10.0-windows).");
+      return 1;
+    }
+#endif
+
     // Initialize settings and database in current directory on startup
     SettingsManager.Initialize();
 
@@ -45,20 +58,9 @@ internal static class Program
       description: "Optional substring filter for app names.")
     { Arity = ArgumentArity.ZeroOrOne };
 
-    var usage = new Command("usage", "Usage in a time range from collected samples");
+    var usage = new Command("usage", "Upload, download, and total bytes in a time range");
     var usageOpts = CreateUsageOptions();
-    RegisterUsageHandler(usage, UsageMetric.Total, usageOpts);
-
-    var usageDownload = new Command("download", "Download (received) bytes in the time range");
-    var downloadOpts = CreateUsageOptions();
-    RegisterUsageHandler(usageDownload, UsageMetric.Download, downloadOpts);
-
-    var usageUpload = new Command("upload", "Upload (sent) bytes in the time range");
-    var uploadOpts = CreateUsageOptions();
-    RegisterUsageHandler(usageUpload, UsageMetric.Upload, uploadOpts);
-
-    usage.AddCommand(usageDownload);
-    usage.AddCommand(usageUpload);
+    RegisterUsageHandler(usage, usageOpts);
 
     var info = new Command("info", "Database path, coverage, and version")
     {
@@ -91,6 +93,45 @@ internal static class Program
       apps,
       rt,
     };
+
+#if WINDOWS
+    var intervalOption = new Option<int>(
+      aliases: new[] { "--interval", "-i" },
+      getDefaultValue: () => 5,
+      description: "Sampling interval in seconds.")
+    {
+      Arity = ArgumentArity.ZeroOrOne,
+    };
+
+    var serviceInstall = new Command("install", "Install the NetM Windows service (Administrator required)")
+    {
+      dbOption,
+      intervalOption,
+    };
+    serviceInstall.SetHandler(RunServiceInstall, dbOption, intervalOption);
+
+    var serviceUninstall = new Command("uninstall", "Remove the NetM Windows service (Administrator required)");
+    serviceUninstall.SetHandler(RunServiceUninstall);
+
+    var serviceStart = new Command("start", "Start the NetM Windows service");
+    serviceStart.SetHandler(RunServiceStart);
+
+    var serviceStop = new Command("stop", "Stop the NetM Windows service");
+    serviceStop.SetHandler(RunServiceStop);
+
+    var serviceStatus = new Command("status", "Show NetM Windows service status");
+    serviceStatus.SetHandler(RunServiceStatus);
+
+    var service = new Command("service", "Manage the NetM Windows service (daemon mode)")
+    {
+      serviceInstall,
+      serviceUninstall,
+      serviceStart,
+      serviceStop,
+      serviceStatus,
+    };
+    root.AddCommand(service);
+#endif
 
     return await root.InvokeAsync(args);
   }
@@ -128,7 +169,7 @@ internal static class Program
       { Description = "SQLite database path" });
   }
 
-  private static void RegisterUsageHandler(Command command, UsageMetric metric, UsageOptions options)
+  private static void RegisterUsageHandler(Command command, UsageOptions options)
   {
     command.AddOption(options.Target);
     command.AddOption(options.From);
@@ -136,15 +177,76 @@ internal static class Program
     command.AddOption(options.IncludePrivate);
     command.AddOption(options.Db);
     command.SetHandler(
-      (target, from, to, includePrivate, db) => RunUsage(metric, target, from, to, includePrivate, db),
+      (target, from, to, includePrivate, db) => RunUsage(target, from, to, includePrivate, db),
       options.Target, options.From, options.To, options.IncludePrivate, options.Db);
   }
+
+#if WINDOWS
+  private static void RunServiceInstall(string dbPath, int intervalSeconds)
+  {
+    var exePath = Environment.ProcessPath;
+    if (string.IsNullOrWhiteSpace(exePath))
+    {
+      Console.Error.WriteLine("Could not resolve the current executable path.");
+      Environment.Exit(1);
+      return;
+    }
+
+    dbPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(dbPath));
+    var code = WindowsServiceManager.Install(exePath, intervalSeconds, dbPath, out var message);
+    Console.WriteLine(message);
+    Environment.Exit(code);
+  }
+
+  private static void RunServiceUninstall()
+  {
+    var code = WindowsServiceManager.Uninstall(out var message);
+    Console.WriteLine(message);
+    Environment.Exit(code);
+  }
+
+  private static void RunServiceStart()
+  {
+    var code = WindowsServiceManager.Start(out var message);
+    Console.WriteLine(message);
+    Environment.Exit(code);
+  }
+
+  private static void RunServiceStop()
+  {
+    var code = WindowsServiceManager.Stop(out var message);
+    Console.WriteLine(message);
+    Environment.Exit(code);
+  }
+
+  private static void RunServiceStatus()
+  {
+    if (!WindowsServiceManager.IsInstalled())
+    {
+      Console.WriteLine($"Service '{WindowsServiceManager.ServiceName}' is not installed.");
+      Console.WriteLine("Install with: netm service install");
+      return;
+    }
+
+    var status = WindowsServiceManager.GetStatus();
+    Console.WriteLine($"Service: {WindowsServiceManager.ServiceName}");
+    Console.WriteLine($"Display: {WindowsServiceManager.DisplayName}");
+    Console.WriteLine($"Status:  {status}");
+    Console.WriteLine("Start:   netm service start");
+    Console.WriteLine("Stop:    netm service stop");
+  }
+#endif
 
   private static void RunInfo(string dbPath)
   {
     using var store = new TrafficStore(dbPath);
     var info = store.GetDatabaseInfo(dbPath);
     var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
+
+#if WINDOWS
+    if (Environment.GetEnvironmentVariable("NETM_DEBUG") == "1")
+      Native.IpHelperApi.PrintStatsDiagnostics();
+#endif
 
     Console.WriteLine($"Version:    {version}");
     Console.WriteLine($"Database:   {Path.GetFullPath(info.DatabasePath)}");
@@ -168,7 +270,6 @@ internal static class Program
   }
 
   private static void RunUsage(
-    UsageMetric metric,
     string? targetRaw,
     string? fromRaw,
     string? toRaw,
@@ -185,17 +286,17 @@ internal static class Program
     switch (target.Kind)
     {
       case UsageTargetKind.Apps:
-        PrintAppRows(store.UsageByAppInRangeUtc(fromUtc, toUtc, includePrivate), metric);
+        PrintAppRows(store.UsageByAppInRangeUtc(fromUtc, toUtc, includePrivate));
         break;
       case UsageTargetKind.IpTop100:
-        PrintIpRows(store.UsageByIpInRangeUtc(fromUtc, toUtc, includePrivate, QueryFilters.TopUsageLimit), metric);
+        PrintIpRows(store.UsageByIpInRangeUtc(fromUtc, toUtc, includePrivate, QueryFilters.TopUsageLimit));
         break;
       case UsageTargetKind.HostTop100:
-        PrintHostRows(store.UsageByHostInRangeUtc(fromUtc, toUtc, includePrivate, QueryFilters.TopUsageLimit), metric);
+        PrintHostRows(store.UsageByHostInRangeUtc(fromUtc, toUtc, includePrivate, QueryFilters.TopUsageLimit));
         break;
       default:
         var totals = store.UsageTotalsInRangeUtc(fromUtc, toUtc, target, includePrivate);
-        PrintTotals(totals, metric);
+        PrintTotals(totals);
         break;
     }
   }
@@ -207,7 +308,7 @@ internal static class Program
     var weeklyStartLocal = StartOfCurrentWeekSaturday(nowLocal);
     var monthlyStartLocal = new DateTime(nowLocal.Year, nowLocal.Month, 1, 0, 0, 0, DateTimeKind.Local);
 
-    var nowUtc = nowLocal.ToUniversalTime().ToString("O");
+    var nowUtc = TrafficStore.FormatBucketUtc(nowLocal.ToUniversalTime());
     var dailyUtc = dailyStartLocal.ToUniversalTime().ToString("O");
     var weeklyUtc = weeklyStartLocal.ToUniversalTime().ToString("O");
     var monthlyUtc = monthlyStartLocal.ToUniversalTime().ToString("O");
@@ -283,82 +384,32 @@ internal static class Program
     Console.WriteLine($"Private IPs: {(includePrivate ? "included" : "excluded")}");
   }
 
-  private static void PrintTotals(UsageTotalsRow row, UsageMetric metric)
+  private static void PrintTotals(UsageTotalsRow row)
   {
-    switch (metric)
-    {
-      case UsageMetric.Download:
-        Console.WriteLine($"Download (recv): {FormatBytes(row.BytesReceived)}");
-        break;
-      case UsageMetric.Upload:
-        Console.WriteLine($"Upload (sent):   {FormatBytes(row.BytesSent)}");
-        break;
-      default:
-        Console.WriteLine($"Upload (sent):   {FormatBytes(row.BytesSent)}");
-        Console.WriteLine($"Download (recv): {FormatBytes(row.BytesReceived)}");
-        Console.WriteLine($"Total:           {FormatBytes(row.BytesSent + row.BytesReceived)}");
-        break;
-    }
+    Console.WriteLine($"Upload (sent):   {FormatBytes(row.BytesSent)}");
+    Console.WriteLine($"Download (recv): {FormatBytes(row.BytesReceived)}");
+    Console.WriteLine($"Total:           {FormatBytes(row.BytesSent + row.BytesReceived)}");
   }
 
-  private static void PrintAppRows(IReadOnlyList<AppUsageRow> rows, UsageMetric metric)
+  private static void PrintAppRows(IReadOnlyList<AppUsageRow> rows)
   {
-    Console.WriteLine(metric switch
-    {
-      UsageMetric.Download => $"{"Application",-32} {"Download",12}",
-      UsageMetric.Upload => $"{"Application",-32} {"Upload",12}",
-      _ => $"{"Application",-32} {"Upload",12} {"Download",12} {"Total",12}",
-    });
-
+    Console.WriteLine($"{"Application",-32} {"Upload",12} {"Download",12} {"Total",12}");
     foreach (var r in rows)
-    {
-      Console.WriteLine(metric switch
-      {
-        UsageMetric.Download => $"{r.AppName,-32} {FormatBytes(r.BytesReceived),12}",
-        UsageMetric.Upload => $"{r.AppName,-32} {FormatBytes(r.BytesSent),12}",
-        _ => $"{r.AppName,-32} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}",
-      });
-    }
+      Console.WriteLine($"{r.AppName,-32} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
   }
 
-  private static void PrintIpRows(IReadOnlyList<IpUsageRow> rows, UsageMetric metric)
+  private static void PrintIpRows(IReadOnlyList<IpUsageRow> rows)
   {
-    Console.WriteLine(metric switch
-    {
-      UsageMetric.Download => $"{"Remote IP",-40} {"Download",12}",
-      UsageMetric.Upload => $"{"Remote IP",-40} {"Upload",12}",
-      _ => $"{"Remote IP",-40} {"Upload",12} {"Download",12} {"Total",12}",
-    });
-
+    Console.WriteLine($"{"Remote IP",-40} {"Upload",12} {"Download",12} {"Total",12}");
     foreach (var r in rows)
-    {
-      Console.WriteLine(metric switch
-      {
-        UsageMetric.Download => $"{r.RemoteIp,-40} {FormatBytes(r.BytesReceived),12}",
-        UsageMetric.Upload => $"{r.RemoteIp,-40} {FormatBytes(r.BytesSent),12}",
-        _ => $"{r.RemoteIp,-40} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}",
-      });
-    }
+      Console.WriteLine($"{r.RemoteIp,-40} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
   }
 
-  private static void PrintHostRows(IReadOnlyList<HostUsageRow> rows, UsageMetric metric)
+  private static void PrintHostRows(IReadOnlyList<HostUsageRow> rows)
   {
-    Console.WriteLine(metric switch
-    {
-      UsageMetric.Download => $"{"Host",-48} {"Download",12}",
-      UsageMetric.Upload => $"{"Host",-48} {"Upload",12}",
-      _ => $"{"Host",-48} {"Upload",12} {"Download",12} {"Total",12}",
-    });
-
+    Console.WriteLine($"{"Host",-48} {"Upload",12} {"Download",12} {"Total",12}");
     foreach (var r in rows)
-    {
-      Console.WriteLine(metric switch
-      {
-        UsageMetric.Download => $"{r.HostName,-48} {FormatBytes(r.BytesReceived),12}",
-        UsageMetric.Upload => $"{r.HostName,-48} {FormatBytes(r.BytesSent),12}",
-        _ => $"{r.HostName,-48} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}",
-      });
-    }
+      Console.WriteLine($"{r.HostName,-48} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
   }
 
   private static string FormatBytes(long value)

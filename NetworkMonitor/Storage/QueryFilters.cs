@@ -14,19 +14,20 @@ internal static class QueryFilters
     if (includePrivate)
       return "";
 
-    return $"""
-      {prefix}(
-        remote_ip NOT GLOB '10.*'
-        AND remote_ip NOT GLOB '127.*'
-        AND remote_ip NOT GLOB '192.168.*'
-        AND remote_ip NOT GLOB '169.254.*'
-        AND remote_ip NOT GLOB '172.[16-31].*'
-        AND remote_ip NOT GLOB 'fe80:*'
-        AND remote_ip NOT GLOB 'fc*:*'
-        AND remote_ip NOT GLOB 'fd*:*'
-        AND remote_ip NOT IN ('::1', '0:0:0:0:0:0:0:1')
-      )
-      """;
+    // Single-line clause: interpolated raw strings treat `$name` as C# interpolation.
+    return prefix
+      + "remote_ip NOT LIKE '10.%' "
+      + "AND remote_ip NOT LIKE '127.%' "
+      + "AND remote_ip NOT LIKE '192.168.%' "
+      + "AND remote_ip NOT LIKE '169.254.%' "
+      + "AND remote_ip NOT LIKE '172.1%' "
+      + "AND remote_ip NOT LIKE '172.2%' "
+      + "AND remote_ip NOT LIKE '172.30.%' "
+      + "AND remote_ip NOT LIKE '172.31.%' "
+      + "AND remote_ip NOT LIKE 'fe80:%' "
+      + "AND remote_ip NOT LIKE 'fc%' "
+      + "AND remote_ip NOT LIKE 'fd%' "
+      + "AND remote_ip NOT IN ('::1', '0:0:0:0:0:0:0:1') ";
   }
 
   public static string TargetClause(UsageTargetKind kind, string? value)

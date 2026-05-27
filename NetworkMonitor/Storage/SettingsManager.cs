@@ -6,45 +6,60 @@ internal static class SettingsManager
 {
     private const string SettingsFileName = "settings.json";
     private const string DatabaseFileName = "traffic.db";
-    private const string EnvVarName = "NETM_DATA_PATH";
+    private const string DataDirEnvVar = "NETM_HOME";
+    private const string DataPathEnvVar = "NETM_DATA_PATH";
+
+    public static string GetDefaultDataDirectory()
+    {
+        var fromEnv = Environment.GetEnvironmentVariable(DataDirEnvVar);
+        if (!string.IsNullOrWhiteSpace(fromEnv))
+            return fromEnv;
+
+        return Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "NetM");
+    }
+
+    public static string GetDefaultDatabasePath() =>
+        Path.Combine(GetDefaultDataDirectory(), DatabaseFileName);
 
     public static void Initialize()
     {
-        var currentDir = Environment.CurrentDirectory;
-        var settingsPath = Path.Combine(currentDir, SettingsFileName);
-        var dbPath = Path.Combine(currentDir, DatabaseFileName);
+        var dataDir = GetDefaultDataDirectory();
+        Directory.CreateDirectory(dataDir);
 
-        // Create settings.json if it doesn't exist (no overwrite)
+        var settingsPath = Path.Combine(dataDir, SettingsFileName);
+        var dbPath = GetDefaultDatabasePath();
+
         if (!File.Exists(settingsPath))
         {
             var defaultSettings = new
             {
                 databasePath = dbPath,
                 createdAt = DateTime.UtcNow.ToString("O"),
-                version = "1.0"
+                version = "1.0",
             };
 
-            var json = JsonSerializer.Serialize(defaultSettings, new JsonSerializerOptions 
-            { 
-                WriteIndented = true 
+            var json = JsonSerializer.Serialize(defaultSettings, new JsonSerializerOptions
+            {
+                WriteIndented = true,
             });
             File.WriteAllText(settingsPath, json);
         }
 
-        // Create empty SQLite database if it doesn't exist (no overwrite)
         if (!File.Exists(dbPath))
         {
             using var store = new TrafficStore(dbPath);
-            // TrafficStore constructor creates the schema automatically
         }
 
-        // Set environment variable with the data path
-        Environment.SetEnvironmentVariable(EnvVarName, currentDir, EnvironmentVariableTarget.Process);
+        Environment.SetEnvironmentVariable(DataPathEnvVar, dataDir, EnvironmentVariableTarget.Process);
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(DataDirEnvVar)))
+            Environment.SetEnvironmentVariable(DataDirEnvVar, dataDir, EnvironmentVariableTarget.Process);
     }
 
-    public static string GetSettingsPath() => Path.Combine(Environment.CurrentDirectory, SettingsFileName);
+    public static string GetSettingsPath() =>
+        Path.Combine(GetDefaultDataDirectory(), SettingsFileName);
 
-    public static string GetDatabasePath() => Path.Combine(Environment.CurrentDirectory, DatabaseFileName);
-
-    public static string? GetDataPathEnvVar() => Environment.GetEnvironmentVariable(EnvVarName);
+    public static string? GetDataPathEnvVar() =>
+        Environment.GetEnvironmentVariable(DataPathEnvVar);
 }

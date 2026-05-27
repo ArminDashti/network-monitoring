@@ -15,6 +15,22 @@ internal sealed class HostNameCache
         _ttl = ttl ?? TimeSpan.FromHours(6); // Default six hour cache for resolved names
     }
 
+    // Returns a cached host label when available; otherwise the IP text (no blocking DNS).
+    public string GetHostLabelFast(IPAddress remote)
+    {
+        if (remote.AddressFamily == AddressFamily.InterNetworkV6 && remote.IsIPv4MappedToIPv6)
+            remote = remote.MapToIPv4();
+
+        if (IPAddress.IsLoopback(remote))
+            return "localhost";
+
+        var key = remote.ToString();
+        if (_cache.TryGetValue(key, out var e) && e.ExpiresUtc > DateTime.UtcNow)
+            return e.Host;
+
+        return key;
+    }
+
     // Returns a friendly host label for a remote IP, using cache and reverse DNS
     public string GetHostLabel(IPAddress remote)
     {

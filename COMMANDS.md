@@ -6,12 +6,16 @@ This file provides a quick reference for the `netm` CLI commands.
 
 | Command | Description |
 |---|---|
-| `netm info` | Show database path, row counts, UTC time coverage, and app version. |
-| `netm usage` | Show upload, download, and total bytes for the selected time window. |
-| `netm usage download` | Show only download (received) bytes for the selected time window. |
-| `netm usage upload` | Show only upload (sent) bytes for the selected time window. |
-| `netm apps list` | List application names observed in the traffic database. |
-| `netm rt` | Show per-app real-time table with download/upload plus daily, weekly, and monthly totals. |
+| `netm service install` | Install the NetM Windows service (Administrator required). |
+| `netm service uninstall` | Remove the NetM Windows service (Administrator required). |
+| `netm service start` | Start the NetM Windows service (daemon collection). |
+| `netm service stop` | Stop the NetM Windows service. |
+| `netm service status` | Show Windows service status. |
+| `netm info` | Database path, coverage, and version |
+| `netm usage` | Upload, download, and total bytes in a time range |
+| `netm apps` | Application names from collected traffic. |
+| `netm apps list` | List application names seen in the database |
+| `netm rt` | Real-time usage table by app with daily/weekly/monthly totals |
 
 ## Common Options
 
@@ -21,16 +25,30 @@ This file provides a quick reference for the `netm` CLI commands.
 | `--from-datetime` | `today T0000` | Local datetime start (`yyMMddTHHmm`). |
 | `--to-datetime` | `now` | Local datetime end (`yyMMddTHHmm`, inclusive). |
 | `--include-private` | `no` | Set `yes` to include RFC1918/link-local traffic. |
-| `--db`, `-d` | `%LocalAppData%\NetworkMonitor\traffic.db` | Path to SQLite database file. |
+| `--db`, `-d` | `%LocalAppData%\NetM\traffic.db` | Path to SQLite database file. |
+
+### `service install` options
+
+| Option | Default | Description |
+|---|---|---|
+| `--interval`, `-i` | `5` | Seconds between TCP samples. |
+| `--db`, `-d` | `%LocalAppData%\NetM\traffic.db` | Path to SQLite database file. |
 
 ## Examples
 
 ```powershell
+# Daemon mode (required for collection)
+netm service install
+netm service start
+netm service status
+netm service stop
+netm service uninstall
+
 netm info
 netm usage
 netm usage --target=apps --from-datetime=260515T0900
-netm usage download --target=ip --include-private=no
-netm usage upload --target=telegram --from-datetime=260514T0000
+netm usage --target=ip --include-private=no
+netm usage --target=telegram --from-datetime=260514T0000
 netm apps list --filter=edge
 netm rt
 ```

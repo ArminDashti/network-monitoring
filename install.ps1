@@ -6,7 +6,9 @@ param(
     [string]$InstallDir = "$env:LocalAppData\NetM",
     [switch]$BuildFromSource,
     [switch]$AddToPath,
-    [switch]$SetEnvVars
+    [switch]$SetEnvVars,
+    [switch]$SkipService,
+    [int]$ServiceInterval = 5
 )
 
 $ErrorActionPreference = "Stop"
@@ -42,33 +44,49 @@ if ($BuildFromSource) {
     
     # Check for .NET SDK
     if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
-        Write-Error-Exit ".NET SDK not found. Please install .NET 10 SDK first."
+        Write-Error-Exit ".NET SDK not found. Please install .NET 9 SDK first."
     }
-    
-    # Clone repository to temp location
-    $TempDir = Join-Path $env:TEMP "netm-build-$((Get-Random))"
-    New-Item -ItemType Directory -Path $TempDir | Out-Null
-    
-    try {
+
+    $LocalProject = Join-Path $PSScriptRoot "NetworkMonitor\NetworkMonitor.csproj"
+    $BuildRoot = $PSScriptRoot
+    $TempDir = $null
+
+    if (-not (Test-Path $LocalProject)) {
+        $TempDir = Join-Path $env:TEMP "netm-build-$((Get-Random))"
+        New-Item -ItemType Directory -Path $TempDir | Out-Null
+        $BuildRoot = $TempDir
         Write-Info "Cloning repository..."
-        git clone --depth 1 https://github.com/OWNER/NetworkMonitor $TempDir 2>&1 | Out-Null
-        
-        Set-Location $TempDir
-        
+        git clone --depth 1 https://github.com/ArminDashti/network-monitoring $TempDir 2>&1 | Out-Null
+        $LocalProject = Join-Path $TempDir "NetworkMonitor\NetworkMonitor.csproj"
+    }
+    else {
+        Write-Info "Building from local repository..."
+    }
+
+    try {
+        Set-Location $BuildRoot
+
         Write-Info "Building release..."
-        dotnet publish ./NetworkMonitor/NetworkMonitor.csproj `
+        dotnet publish $LocalProject `
             -c Release `
+            -f net9.0-windows `
             -r win-$Arch `
             --self-contained true `
             -p:PublishSingleFile=true `
             -p:IncludeNativeLibrariesForSelfExtract=true `
-            -o $InstallDir 2>&1 | Out-Null
-        
+            -o $InstallDir
+
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error-Exit "dotnet publish failed with exit code $LASTEXITCODE"
+        }
+
         Write-Success "Build completed successfully"
     }
     finally {
         Set-Location $PSScriptRoot
-        Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
+        if ($TempDir) {
+            Remove-Item -Recurse -Force $TempDir -ErrorAction SilentlyContinue
+        }
     }
     
     # Copy default config file if it doesn't exist
@@ -135,10 +153,10 @@ else {
     
     # Determine download URL
     if ($Version -eq "latest") {
-        $ReleaseUrl = "https://api.github.com/repos/OWNER/NetworkMonitor/releases/latest"
+        $ReleaseUrl = "https://api.github.com/repos/ArminDashti/network-monitoring/releases/latest"
     }
     else {
-        $ReleaseUrl = "https://api.github.com/repos/OWNER/NetworkMonitor/releases/tags/$Version"
+        $ReleaseUrl = "https://api.github.com/repos/ArminDashti/network-monitoring/releases/tags/$Version"
     }
     
     try {
@@ -201,7 +219,7 @@ log_file = "%NETM_HOME%\\netm.log"
         
         # Download and install SQLite CLI tool
         Write-Info "Installing SQLite CLI tool..."
-        $SqliteUrl = "https://www.sqlite.org/2024/sqlite-tool-win-$Arch-3480000.zip"
+        $SqliteUrl = "https://www.sqlite.org/2024/sqlite-tools-win-$Arch-3480000.zip"
         $SqliteDownloadPath = Join-Path $env:TEMP "sqlite-tools.zip"
         
         try {
@@ -227,7 +245,7 @@ log_file = "%NETM_HOME%\\netm.log"
         Write-Info "Release download failed, falling back to source build..."
         $BuildFromSource = $true
         # Re-run the build logic
-        & $PSCommandPath -BuildFromSource:$BuildFromSource -InstallDir $InstallDir -AddToPath:$AddToPath -SetEnvVars:$SetEnvVars
+        & $PSCommandPath -BuildFromSource:$BuildFromSource -InstallDir $InstallDir -AddToPath:$AddToPath -SetEnvVars:$SetEnvVars -SkipService:$SkipService
         exit $LASTEXITCODE
     }
 }
@@ -257,6 +275,30 @@ $NetmExe = Join-Path $InstallDir "netm.exe"
 $SqliteExe = Join-Path $InstallDir "sqlite3.exe"
 $ConfigFile = Join-Path $InstallDir "configs.toml"
 
+if (-not $SkipService) {
+    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+    if (-not $isAdmin) {
+        Write-Host "[WARN] Daemon mode requires an elevated PowerShell session." -ForegroundColor Yellow
+        Write-Host "[WARN] Re-run install.ps1 as Administrator, or run: netm service install && netm service start" -ForegroundColor Yellow
+    }
+    else {
+        $DbPath = Join-Path $InstallDir "traffic.db"
+        Write-Info "Installing NetM Windows service (daemon mode, interval ${ServiceInterval}s)..."
+        & $NetmExe service install --db $DbPath --interval $ServiceInterval
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error-Exit "netm service install failed with exit code $LASTEXITCODE"
+        }
+
+        Write-Info "Starting NetM Windows service..."
+        & $NetmExe service start
+        if ($LASTEXITCODE -ne 0) {
+            Write-Error-Exit "netm service start failed with exit code $LASTEXITCODE"
+        }
+
+        Write-Success "NetM Windows service installed and started (daemon mode)."
+    }
+}
+
 if (Test-Path $NetmExe) {
     Write-Success "Installation complete! Files installed to: $InstallDir"
     Write-Info "Installed files:"
@@ -269,6 +311,7 @@ if (Test-Path $NetmExe) {
     }
     Write-Info ""
     Write-Info "Run 'netm info' to verify the installation"
+    Write-Info "Daemon mode: install.ps1 installs the Windows service by default (elevated). Use -SkipService to install binaries only."
     Write-Info "Use 'sqlite3.exe' to manage the SQLite database directly"
     if (-not ($AddToPath -or $SetEnvVars)) {
         Write-Info ""

@@ -1,0 +1,27 @@
+# Network Monitor — key points
+
+## Data directory
+- Default install/data path: `%LocalAppData%\NetM\` (`traffic.db`, `settings.json`).
+- Override with `NETM_HOME` environment variable.
+
+## Commands
+- Collection is **daemon-only**: `netm service install` / `start` (Windows service). Foreground `collect` removed.
+- `netm info`, `netm usage`, `netm apps list`, `netm rt` — query SQLite.
+- `install.ps1` installs and starts the service by default when elevated; `-SkipService` for binaries only.
+
+## Build
+- Target frameworks: `net9.0` (portable queries) and `net9.0-windows` (TCP collection).
+- Build Windows CLI: `dotnet build NetworkMonitor/NetworkMonitor.csproj -c Release -f net9.0-windows`
+
+## Windows APIs
+- IPv6 TCP table APIs are optional (skipped when exports missing from `iphlpapi.dll`).
+- Per-connection byte counters use `SetPerTcpConnectionEStats` + `GetPerTcpConnectionEStats` with separate Rw/Rod buffers.
+- `TCP_ESTATS_DATA_ROD_v0` must match `tcpestats.h` exactly (e.g. `SegsOut`/`SegsIn` are `ULONG64`, not `ULONG`). Wrong layout → `GetPerTcpConnectionEStats` error 1784 and zero rows.
+- Collector uses `HostNameCache.GetHostLabelFast` in the hot path (IP fallback); blocking reverse DNS per connection each poll made collection appear stuck.
+- `NETM_DEBUG=1` on `netm info` prints eStats diagnostics via `IpHelperApi.PrintStatsDiagnostics()`.
+- If `info` stays at 0 rows, ensure the NetM service is running (`netm service status`).
+
+## SQL
+- Avoid `$"""` interpolated raw strings for SQL fragments containing `$parameter` names — use `StringBuilder` or non-interpolated strings.
+- Private IP filtering uses `LIKE` patterns in `QueryFilters.PrivateIpExcludeClause`.
+- Storage buckets are **1 second** (`TrafficStore.BucketIntervalSeconds`); column is still `minute_utc` for schema compatibility. Keys use `yyyy-MM-ddTHH:mm:ssZ`.
