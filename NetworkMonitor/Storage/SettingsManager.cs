@@ -42,6 +42,8 @@ internal static class SettingsManager
 
     public static string GetSettingsPath() => NetmPaths.SettingsFile;
 
+    public static string GetDefaultDatabasePath() => NetmConfig.Load().ResolvedDatabasePath;
+
     public static string GetDatabasePath() => NetmConfig.Load().ResolvedDatabasePath;
 
     public static string? GetDataPathEnvVar() => Environment.GetEnvironmentVariable(EnvVarName);

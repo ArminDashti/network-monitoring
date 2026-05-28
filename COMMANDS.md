@@ -9,6 +9,11 @@ This file provides a quick reference for the `netm` CLI commands.
 | `netm start` | Start the background traffic collector. |
 | `netm stop` | Stop the background traffic collector. |
 | `netm status` | Show whether the collector is running (PID, uptime, DB stats). |
+| `netm service install` | Install the NetM Windows service (Administrator required). |
+| `netm service uninstall` | Remove the NetM Windows service (Administrator required). |
+| `netm service start` | Start the NetM Windows service (daemon collection). |
+| `netm service stop` | Stop the NetM Windows service. |
+| `netm service status` | Show Windows service status. |
 | `netm info` | Show database path, row counts, UTC time coverage, and app version. |
 | `netm usage` | Show upload, download, and total bytes for the selected time window. |
 | `netm usage download` | Show only download (received) bytes for the selected time window. |
@@ -25,6 +30,12 @@ This file provides a quick reference for the `netm` CLI commands.
 | `--to-datetime` | `now` | Local datetime end (`yyMMddTHHmm`, inclusive). |
 | `--include-private` | `no` | Set `yes` to include RFC1918/link-local traffic. |
 | `--db`, `-d` | `%LocalAppData%\NetM\traffic.db` | Path to SQLite database file. |
+### `service install` options
+
+| Option | Default | Description |
+|---|---|---|
+| `--interval`, `-i` | `5` | Seconds between TCP samples. |
+| `--db`, `-d` | `%LocalAppData%\NetM\traffic.db` | Path to SQLite database file. |
 
 ## Examples
 
@@ -32,11 +43,17 @@ This file provides a quick reference for the `netm` CLI commands.
 netm start
 netm status
 netm stop
+# Daemon mode (required for collection)
+netm service install
+netm service start
+netm service status
+netm service stop
+netm service uninstall
 netm info
 netm usage
 netm usage --target=apps --from-datetime=260515T0900
-netm usage download --target=ip --include-private=no
-netm usage upload --target=telegram --from-datetime=260514T0000
+netm usage --target=ip --include-private=no
+netm usage --target=telegram --from-datetime=260514T0000
 netm apps list --filter=edge
 netm rt
 ```

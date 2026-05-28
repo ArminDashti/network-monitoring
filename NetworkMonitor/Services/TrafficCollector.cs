@@ -103,7 +103,7 @@ internal sealed class TrafficCollector
         if (deltaOut == 0 && deltaIn == 0) // No new data on this connection
             return;
 
-        var host = _hosts.GetHostLabel(remoteIp); // Friendly remote host name
+        var host = _hosts.GetHostLabelFast(remoteIp); // Avoid blocking DNS on every TCP row each poll
         var app = ProcessNameResolver.GetAppName(owningPid); // Process that owns the socket
 
         deltas.Add(new TrafficDelta(

@@ -29,9 +29,9 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: "9.0.x"
 
-      - name: Build net10.0 (cross-platform)
+      - name: Build net9.0 (cross-platform)
         run: dotnet build ./NetworkMonitor/NetworkMonitor.csproj -c Release
 
   publish:
@@ -42,10 +42,10 @@ jobs:
 
       - uses: actions/setup-dotnet@v4
         with:
-          dotnet-version: "10.0.x"
+          dotnet-version: "9.0.x"
 
       - name: Publish self-contained single-file exe
-        run: dotnet publish ./NetworkMonitor/NetworkMonitor.csproj -c Release -f net10.0-windows -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./artifacts/publish
+        run: dotnet publish ./NetworkMonitor/NetworkMonitor.csproj -c Release -f net9.0-windows -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o ./artifacts/publish
 
       - uses: actions/upload-artifact@v4
         with:

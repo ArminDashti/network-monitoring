@@ -5,6 +5,8 @@ namespace NetworkMonitor.Storage;
 
 internal sealed class TrafficStore : IDisposable
 {
+    private const int BucketIntervalSeconds = 1;
+
     private readonly SqliteConnection _connection;
 
     public TrafficStore(string databasePath)
@@ -56,7 +58,7 @@ internal sealed class TrafficStore : IDisposable
             return;
 
         var now = DateTime.UtcNow;
-        var minuteUtc = new DateTime(now.Year, now.Month, now.Day, now.Hour, now.Minute, 0, DateTimeKind.Utc).ToString("yyyy-MM-ddTHH:mm:00Z");
+        var minuteUtc = FormatBucketUtc(now);
         
         using var tx = _connection.BeginTransaction();
         foreach (var d in deltas)
@@ -92,11 +94,15 @@ internal sealed class TrafficStore : IDisposable
         bool includePrivate)
     {
         using var cmd = _connection.CreateCommand();
-        cmd.CommandText = """
+        cmd.CommandText = BuildRangeSql(
+            """
             SELECT COALESCE(SUM(bytes_sent), 0), COALESCE(SUM(bytes_received), 0)
             FROM usage
             WHERE minute_utc >= $from AND minute_utc <= $to
-            """ + QueryFilters.PrivateIpExcludeClause(includePrivate) + QueryFilters.TargetClause(target.Kind, target.Value);
+            """,
+            includePrivate,
+            target,
+            trailingSql: "");
         AddRangeAndTargetParams(cmd, fromUtcInclusive, toUtcInclusive, target);
         using var r = cmd.ExecuteReader();
         r.Read();
@@ -109,19 +115,22 @@ internal sealed class TrafficStore : IDisposable
         bool includePrivate)
     {
         using var cmd = _connection.CreateCommand();
-        cmd.CommandText = """
+        cmd.CommandText = BuildRangeSql(
+            """
             SELECT app_name,
-                   COALESCE(SUM(bytes_sent), 0) AS up,
-                   COALESCE(SUM(bytes_received), 0) AS down
+                   COALESCE(SUM(bytes_sent), 0) AS bytes_sent_total,
+                   COALESCE(SUM(bytes_received), 0) AS bytes_recv_total
             FROM usage
             WHERE minute_utc >= $from AND minute_utc <= $to
-            """ + QueryFilters.PrivateIpExcludeClause(includePrivate) + """
-            GROUP BY app_name
-            ORDER BY (up + down) DESC;
-            """;
+            """,
+            includePrivate,
+            target: null,
+            trailingSql: "GROUP BY app_name;");
         cmd.Parameters.AddWithValue("$from", fromUtcInclusive);
         cmd.Parameters.AddWithValue("$to", toUtcInclusive);
-        return ReadAppUsageRows(cmd);
+        return ReadAppUsageRows(cmd)
+            .OrderByDescending(r => r.BytesSent + r.BytesReceived)
+            .ToList();
     }
 
     public IReadOnlyList<IpUsageRow> UsageByIpInRangeUtc(
@@ -132,19 +141,22 @@ internal sealed class TrafficStore : IDisposable
     {
         using var cmd = _connection.CreateCommand();
         var limitClause = limit is null ? "" : $" LIMIT {limit.Value}";
-        cmd.CommandText = """
+        cmd.CommandText = BuildRangeSql(
+            """
             SELECT remote_ip,
-                   COALESCE(SUM(bytes_sent), 0) AS up,
-                   COALESCE(SUM(bytes_received), 0) AS down
+                   COALESCE(SUM(bytes_sent), 0) AS bytes_sent_total,
+                   COALESCE(SUM(bytes_received), 0) AS bytes_recv_total
             FROM usage
             WHERE minute_utc >= $from AND minute_utc <= $to
-            """ + QueryFilters.PrivateIpExcludeClause(includePrivate) + """
-            GROUP BY remote_ip
-            ORDER BY (up + down) DESC
-            """ + limitClause + ";";
+            """,
+            includePrivate,
+            target: null,
+            trailingSql: $"GROUP BY remote_ip{limitClause};");
         cmd.Parameters.AddWithValue("$from", fromUtcInclusive);
         cmd.Parameters.AddWithValue("$to", toUtcInclusive);
-        return ReadIpUsageRows(cmd);
+        var ipRows = ReadIpUsageRows(cmd)
+            .OrderByDescending(r => r.BytesSent + r.BytesReceived);
+        return limit is null ? ipRows.ToList() : ipRows.Take(limit.Value).ToList();
     }
 
     public IReadOnlyList<HostUsageRow> UsageByHostInRangeUtc(
@@ -155,19 +167,22 @@ internal sealed class TrafficStore : IDisposable
     {
         using var cmd = _connection.CreateCommand();
         var limitClause = limit is null ? "" : $" LIMIT {limit.Value}";
-        cmd.CommandText = """
+        cmd.CommandText = BuildRangeSql(
+            """
             SELECT host_name,
-                   COALESCE(SUM(bytes_sent), 0) AS up,
-                   COALESCE(SUM(bytes_received), 0) AS down
+                   COALESCE(SUM(bytes_sent), 0) AS bytes_sent_total,
+                   COALESCE(SUM(bytes_received), 0) AS bytes_recv_total
             FROM usage
             WHERE minute_utc >= $from AND minute_utc <= $to
-            """ + QueryFilters.PrivateIpExcludeClause(includePrivate) + """
-            GROUP BY host_name
-            ORDER BY (up + down) DESC
-            """ + limitClause + ";";
+            """,
+            includePrivate,
+            target: null,
+            trailingSql: $"GROUP BY host_name{limitClause};");
         cmd.Parameters.AddWithValue("$from", fromUtcInclusive);
         cmd.Parameters.AddWithValue("$to", toUtcInclusive);
-        return ReadHostUsageRows(cmd);
+        var hostRows = ReadHostUsageRows(cmd)
+            .OrderByDescending(r => r.BytesSent + r.BytesReceived);
+        return limit is null ? hostRows.ToList() : hostRows.Take(limit.Value).ToList();
     }
 
     public IReadOnlyList<string> ListAppNames(string? filter)
@@ -266,6 +281,44 @@ internal sealed class TrafficStore : IDisposable
         return new DatabaseInfoRow(databasePath, rowCount, firstMinute, lastMinute, appCount, fileBytes);
     }
 
+    private static DateTime TruncateUtcToBucket(DateTime utcNow)
+    {
+        var utc = utcNow.Kind == DateTimeKind.Utc
+            ? utcNow
+            : utcNow.ToUniversalTime();
+
+        var second = utc.Second / BucketIntervalSeconds * BucketIntervalSeconds;
+        return new DateTime(utc.Year, utc.Month, utc.Day, utc.Hour, utc.Minute, second, DateTimeKind.Utc);
+    }
+
+    internal static string FormatBucketUtc(DateTime utcNow) =>
+        TruncateUtcToBucket(utcNow).ToString("yyyy-MM-ddTHH:mm:ssZ");
+
+    private static string BuildRangeSql(
+        string selectAndWhere,
+        bool includePrivate,
+        UsageTarget? target,
+        string trailingSql)
+    {
+        var sql = new System.Text.StringBuilder(selectAndWhere);
+        if (!includePrivate)
+        {
+            sql.AppendLine();
+            sql.Append(QueryFilters.PrivateIpExcludeClause(includePrivate: false, prefix: "AND "));
+        }
+
+        if (target is UsageTarget t)
+            sql.Append(QueryFilters.TargetClause(t.Kind, t.Value));
+
+        if (!string.IsNullOrWhiteSpace(trailingSql))
+        {
+            sql.AppendLine();
+            sql.Append(trailingSql);
+        }
+
+        return sql.ToString();
+    }
+
     private static void AddRangeAndTargetParams(SqliteCommand cmd, string fromUtc, string toUtc, UsageTarget target)
     {
         cmd.Parameters.AddWithValue("$from", fromUtc);
@@ -310,7 +363,7 @@ internal sealed class TrafficStore : IDisposable
                      SUM(bytes_received) AS down
               FROM usage
               GROUP BY remote_ip
-              ORDER BY (up + down) DESC;
+              ORDER BY bytes_sent + bytes_received DESC;
               """
             : """
               SELECT remote_ip,
@@ -319,7 +372,7 @@ internal sealed class TrafficStore : IDisposable
               FROM usage
               WHERE remote_ip = $f
               GROUP BY remote_ip
-              ORDER BY (up + down) DESC;
+              ORDER BY bytes_sent + bytes_received DESC;
               """;
         if (filterIp is not null)
             cmd.Parameters.AddWithValue("$f", filterIp);
@@ -336,7 +389,7 @@ internal sealed class TrafficStore : IDisposable
                      SUM(bytes_received) AS down
               FROM usage
               GROUP BY nic_name
-              ORDER BY (up + down) DESC;
+              ORDER BY bytes_sent + bytes_received DESC;
               """
             : """
               SELECT nic_name,
@@ -345,7 +398,7 @@ internal sealed class TrafficStore : IDisposable
               FROM usage
               WHERE nic_name = $f
               GROUP BY nic_name
-              ORDER BY (up + down) DESC;
+              ORDER BY bytes_sent + bytes_received DESC;
               """;
         if (filterNic is not null)
             cmd.Parameters.AddWithValue("$f", filterNic);
@@ -362,7 +415,7 @@ internal sealed class TrafficStore : IDisposable
                      SUM(bytes_received) AS down
               FROM usage
               GROUP BY host_name
-              ORDER BY (up + down) DESC;
+              ORDER BY bytes_sent + bytes_received DESC;
               """
             : """
               SELECT host_name,
@@ -371,7 +424,7 @@ internal sealed class TrafficStore : IDisposable
               FROM usage
               WHERE host_name LIKE $f
               GROUP BY host_name
-              ORDER BY (up + down) DESC;
+              ORDER BY bytes_sent + bytes_received DESC;
               """;
         if (filterHost is not null)
             cmd.Parameters.AddWithValue("$f", $"%{filterHost}%");
