@@ -14,6 +14,9 @@ internal static class IpHelperApi
 
     public const int TcpConnectionEstatsData = 1; // Ask for per-connection data byte statistics
 
+    public const uint MibTcpStateEstablished = 5;
+    private const uint ErrorInsufficientBuffer = 122;
+
     // Loads the extended IPv4 TCP table from iphlpapi.dll
     [DllImport("iphlpapi.dll", SetLastError = true)]
     public static extern uint GetExtendedTcpTable(
@@ -23,6 +26,15 @@ internal static class IpHelperApi
         int ulAf,
         int tableClass,
         uint reserved = 0);
+
+    [DllImport("iphlpapi.dll", SetLastError = true)]
+    public static extern uint SetPerTcpConnectionEStats(
+        ref MibTcpRow row,
+        int estatsType,
+        nint rw,
+        uint rwVersion,
+        uint rwSize,
+        uint offset);
 
     // Reads data-byte counters for one IPv4 TCP connection
     [DllImport("iphlpapi.dll", SetLastError = true)]
@@ -34,15 +46,14 @@ internal static class IpHelperApi
         uint rwSize,
         uint offset);
 
-    // Loads the extended IPv6 TCP table from iphlpapi.dll
     [DllImport("iphlpapi.dll", SetLastError = true)]
-    public static extern uint GetExtendedTcp6Table(
-        nint pTcpTable,
-        ref int pdwSize,
-        bool bOrder,
-        int ulAf,
-        int tableClass,
-        uint reserved = 0);
+    public static extern uint SetPerTcp6ConnectionEStats(
+        ref MibTcp6Row row,
+        int estatsType,
+        nint rw,
+        uint rwVersion,
+        uint rwSize,
+        uint offset);
 
     // Reads data-byte counters for one IPv6 TCP connection
     [DllImport("iphlpapi.dll", SetLastError = true)]
@@ -123,6 +134,12 @@ internal static class IpHelperApi
         public uint OwningPid;
     }
 
+    [StructLayout(LayoutKind.Sequential)]
+    public struct TcpEstatsDataEnableV0
+    {
+        public byte EnableCollection;
+    }
+
     // Windows layout for TCP data statistics returned by eStats APIs
     [StructLayout(LayoutKind.Sequential, Pack = 8)]
     public struct TcpEstatsDataRodV0 // Rod = Raw Offload Data. This struct contains statistics for TCP connections that use raw offload.
@@ -180,6 +197,38 @@ internal static class IpHelperApi
         return new IPAddress(bytes);
     }
 
+    public static void TryEnableTcp4DataStats(ref MibTcpRow row)
+    {
+        var enable = new TcpEstatsDataEnableV0 { EnableCollection = 1 };
+        var size = (uint)Marshal.SizeOf<TcpEstatsDataEnableV0>();
+        var buffer = Marshal.AllocHGlobal((int)size);
+        try
+        {
+            Marshal.StructureToPtr(enable, buffer, false);
+            _ = SetPerTcpConnectionEStats(ref row, TcpConnectionEstatsData, buffer, 0, size, 0);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
+    public static void TryEnableTcp6DataStats(ref MibTcp6Row row)
+    {
+        var enable = new TcpEstatsDataEnableV0 { EnableCollection = 1 };
+        var size = (uint)Marshal.SizeOf<TcpEstatsDataEnableV0>();
+        var buffer = Marshal.AllocHGlobal((int)size);
+        try
+        {
+            Marshal.StructureToPtr(enable, buffer, false);
+            _ = SetPerTcp6ConnectionEStats(ref row, TcpConnectionEstatsData, buffer, 0, size, 0);
+        }
+        finally
+        {
+            Marshal.FreeHGlobal(buffer);
+        }
+    }
+
     // Tries to read IPv4 TCP data byte counters for one connection row
     public static bool TryGetTcp4DataStats(ref MibTcpRow row, out TcpEstatsDataRodV0 data)
     {
@@ -220,23 +269,36 @@ internal static class IpHelperApi
         }
     }
 
+    public static int LastTcp4RawRowCount { get; private set; }
+
     // Lists all IPv4 TCP connections with byte counters and owning process
     public static List<Tcp4ConnectionSnapshot> EnumerateTcp4Connections()
     {
+        LastTcp4RawRowCount = 0;
         var result = new List<Tcp4ConnectionSnapshot>(); // Output snapshots
-        var size = 0; // Required buffer size starts at zero
-        _ = GetExtendedTcpTable(nint.Zero, ref size, true, AfInet, TcpTableOwnerPidAll); // Size probe call
-        if (size <= 0) // No table or API unavailable
-            return result;
-
-        var buffer = Marshal.AllocHGlobal(size); // Allocate table buffer
+        var size = 0;
+        nint buffer = nint.Zero;
         try
         {
-            var ret = GetExtendedTcpTable(buffer, ref size, true, AfInet, TcpTableOwnerPidAll); // Fill table
-            if (ret != 0) // API error
-                return result;
+            uint ret;
+            while (true)
+            {
+                ret = GetExtendedTcpTable(buffer, ref size, false, AfInet, TcpTableOwnerPidAll);
+                if (ret == 0)
+                    break;
+                if (ret != ErrorInsufficientBuffer)
+                    return result;
+                if (buffer != nint.Zero)
+                    Marshal.FreeHGlobal(buffer);
+                if (size <= 0)
+                    return result;
+                buffer = Marshal.AllocHGlobal(size);
+            }
 
             var numEntries = Marshal.ReadInt32(buffer); // First int is row count
+            LastTcp4RawRowCount = numEntries;
+            if (numEntries < 0 || numEntries > 100_000)
+                return result;
             var rowSize = Marshal.SizeOf<MibTcpRowOwnerPid>(); // Bytes per row
             var offset = sizeof(int); // Rows start after the count
 
@@ -258,8 +320,14 @@ internal static class IpHelperApi
                     RemotePort = row.RemotePort,
                 };
 
-                if (!TryGetTcp4DataStats(ref mib, out var estats)) // Skip rows without stats
-                    continue;
+                TryEnableTcp4DataStats(ref mib);
+                ulong bytesOut = 0;
+                ulong bytesIn = 0;
+                if (TryGetTcp4DataStats(ref mib, out var estats))
+                {
+                    bytesOut = estats.DataBytesOut;
+                    bytesIn = estats.DataBytesIn;
+                }
 
                 result.Add(new Tcp4ConnectionSnapshot(
                     row.State,
@@ -268,13 +336,14 @@ internal static class IpHelperApi
                     remoteIp,
                     remotePort,
                     row.OwningPid,
-                    estats.DataBytesOut,
-                    estats.DataBytesIn));
+                    bytesOut,
+                    bytesIn));
             }
         }
         finally
         {
-            Marshal.FreeHGlobal(buffer); // Release table memory
+            if (buffer != nint.Zero)
+                Marshal.FreeHGlobal(buffer);
         }
 
         return result;
@@ -285,18 +354,27 @@ internal static class IpHelperApi
     {
         var result = new List<Tcp6ConnectionSnapshot>();
         var size = 0;
-        _ = GetExtendedTcp6Table(nint.Zero, ref size, true, AfInet6, TcpTableOwnerPidAll);
-        if (size <= 0)
-            return result;
-
-        var buffer = Marshal.AllocHGlobal(size);
+        nint buffer = nint.Zero;
         try
         {
-            var ret = GetExtendedTcp6Table(buffer, ref size, true, AfInet6, TcpTableOwnerPidAll);
-            if (ret != 0)
-                return result;
+            uint ret;
+            while (true)
+            {
+                ret = GetExtendedTcpTable(buffer, ref size, false, AfInet6, TcpTableOwnerPidAll);
+                if (ret == 0)
+                    break;
+                if (ret != ErrorInsufficientBuffer)
+                    return result;
+                if (buffer != nint.Zero)
+                    Marshal.FreeHGlobal(buffer);
+                if (size <= 0)
+                    return result;
+                buffer = Marshal.AllocHGlobal(size);
+            }
 
             var numEntries = Marshal.ReadInt32(buffer);
+            if (numEntries < 0 || numEntries > 100_000)
+                return result;
             var rowSize = Marshal.SizeOf<MibTcp6RowOwnerPid>();
             var offset = sizeof(int);
 
@@ -309,8 +387,12 @@ internal static class IpHelperApi
                 var localPort = NetworkOrderPort(row.LocalPort);
                 var remotePort = NetworkOrderPort(row.RemotePort);
 
+                if (row.State != MibTcpStateEstablished)
+                    continue;
+
                 var mib = MibTcp6Row.FromOwnerRow(row); // Convert to stats API layout
 
+                TryEnableTcp6DataStats(ref mib);
                 if (!TryGetTcp6DataStats(ref mib, out var estats))
                     continue;
 
@@ -327,7 +409,8 @@ internal static class IpHelperApi
         }
         finally
         {
-            Marshal.FreeHGlobal(buffer);
+            if (buffer != nint.Zero)
+                Marshal.FreeHGlobal(buffer);
         }
 
         return result;

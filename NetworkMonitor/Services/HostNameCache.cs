@@ -6,41 +6,50 @@ namespace NetworkMonitor.Services;
 
 internal sealed class HostNameCache
 {
-    private readonly ConcurrentDictionary<string, (string Host, DateTime ExpiresUtc)> _cache = new(StringComparer.OrdinalIgnoreCase); // DNS results keyed by IP text
-    private readonly TimeSpan _ttl; // How long a successful lookup stays valid
+    private readonly ConcurrentDictionary<string, (string Host, DateTime ExpiresUtc)> _cache = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, byte> _pending = new(StringComparer.OrdinalIgnoreCase);
+    private readonly TimeSpan _ttl;
 
-    // Creates the cache with an optional time-to-live for host names
     public HostNameCache(TimeSpan? ttl = null)
     {
-        _ttl = ttl ?? TimeSpan.FromHours(6); // Default six hour cache for resolved names
+        _ttl = ttl ?? TimeSpan.FromHours(6);
     }
 
-    // Returns a friendly host label for a remote IP, using cache and reverse DNS
     public string GetHostLabel(IPAddress remote)
     {
-        if (remote.AddressFamily == AddressFamily.InterNetworkV6 && remote.IsIPv4MappedToIPv6) // Normalize dual-stack form
+        if (remote.AddressFamily == AddressFamily.InterNetworkV6 && remote.IsIPv4MappedToIPv6)
             remote = remote.MapToIPv4();
 
-        if (IPAddress.IsLoopback(remote)) // Local machine endpoints
+        if (IPAddress.IsLoopback(remote))
             return "localhost";
 
-        var key = remote.ToString(); // Cache key is the IP string
-        if (_cache.TryGetValue(key, out var e) && e.ExpiresUtc > DateTime.UtcNow) // Fresh cached name
-            return e.Host;
+        var key = remote.ToString();
+        if (_cache.TryGetValue(key, out var entry) && entry.ExpiresUtc > DateTime.UtcNow)
+            return entry.Host;
 
+        if (_pending.TryAdd(key, 0))
+            ThreadPool.QueueUserWorkItem(_ => ResolveHost(key, remote));
+
+        return key;
+    }
+
+    private void ResolveHost(string key, IPAddress remote)
+    {
         try
         {
-            var entry = Dns.GetHostEntry(remote); // Reverse DNS lookup
-            var host = entry.HostName; // Primary host name from DNS
-            if (string.Equals(host, key, StringComparison.OrdinalIgnoreCase)) // DNS only echoed the IP
+            var entry = Dns.GetHostEntry(remote);
+            var host = entry.HostName;
+            if (string.Equals(host, key, StringComparison.OrdinalIgnoreCase))
                 host = key;
-            _cache[key] = (host, DateTime.UtcNow.Add(_ttl)); // Store success until TTL expires
-            return host;
+            _cache[key] = (host, DateTime.UtcNow.Add(_ttl));
         }
         catch
         {
-            _cache[key] = (key, DateTime.UtcNow.Add(TimeSpan.FromMinutes(15))); // Short cache on lookup failure
-            return key; // Fall back to showing the IP address
+            _cache[key] = (key, DateTime.UtcNow.Add(TimeSpan.FromMinutes(15)));
+        }
+        finally
+        {
+            _pending.TryRemove(key, out _);
         }
     }
 }

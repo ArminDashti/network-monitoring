@@ -195,6 +195,46 @@ internal sealed class TrafficStore : IDisposable
         return list;
     }
 
+    public long PruneOlderThanUtc(string cutoffUtcInclusive)
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM usage WHERE minute_utc < $cutoff;";
+        cmd.Parameters.AddWithValue("$cutoff", cutoffUtcInclusive);
+        return cmd.ExecuteNonQuery();
+    }
+
+    public long PruneOldestFraction(double fraction)
+    {
+        if (fraction <= 0 || fraction >= 1)
+            return 0;
+
+        using var countCmd = _connection.CreateCommand();
+        countCmd.CommandText = "SELECT COUNT(*) FROM usage;";
+        var total = Convert.ToInt64(countCmd.ExecuteScalar() ?? 0L);
+        if (total == 0)
+            return 0;
+
+        var toDelete = (long)Math.Ceiling(total * fraction);
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = """
+            DELETE FROM usage
+            WHERE rowid IN (
+              SELECT rowid FROM usage
+              ORDER BY minute_utc ASC
+              LIMIT $limit
+            );
+            """;
+        cmd.Parameters.AddWithValue("$limit", toDelete);
+        return cmd.ExecuteNonQuery();
+    }
+
+    public void Vacuum()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "VACUUM;";
+        cmd.ExecuteNonQuery();
+    }
+
     public DatabaseInfoRow GetDatabaseInfo(string databasePath)
     {
         using var cmd = _connection.CreateCommand();

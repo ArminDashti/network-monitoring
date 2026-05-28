@@ -1,0 +1,15 @@
+# Network Monitor key points
+
+## Daemon CLI
+- `netm start` spawns hidden `netm collect` in `%NETM_HOME%` (or `%LocalAppData%\NetM`).
+- `netm stop` / `netm status` use `%NETM_HOME%\netm.pid` (JSON: PID, started UTC, database path).
+- Config: `%NETM_HOME%\configs.toml` (`monitoring.sampling_interval`, `storage.retention_days`, etc.).
+
+## Collection pipeline
+- `CollectionLoop` → `TrafficCollector` → `TrafficStore.ApplyDeltas` (minute UTC buckets).
+- `GetExtendedTcpTable` uses the ERROR_INSUFFICIENT_BUFFER resize loop; IPv6 uses the same API with `AF_INET6` (not `GetExtendedTcp6Table`).
+- Enable TCP ESTATS via `SetPerTcpConnectionEStats` before `GetPerTcpConnectionEStats`.
+- `HostNameCache` resolves DNS on a background thread so sampling does not block on reverse DNS.
+
+## Paths
+- Default DB: `%NETM_HOME%\traffic.db` from `configs.toml`; CLI `--db` overrides for queries only.

@@ -10,7 +10,6 @@ internal sealed class TrafficCollector
     private readonly NicResolver _nics; // Resolves local IP to NIC name
     private readonly HostNameCache _hosts; // Resolves remote IP to host label
     private readonly Dictionary<string, (ulong Out, ulong In)> _last = new(StringComparer.Ordinal); // Last byte counters per connection key
-
     // Wires helper services used when sampling TCP connections
     public TrafficCollector(NicResolver nics, HostNameCache hosts)
     {
@@ -42,21 +41,28 @@ internal sealed class TrafficCollector
                 "tcp4");
         }
 
-        foreach (var c in IpHelperApi.EnumerateTcp6Connections()) // Every IPv6 TCP row from Windows
+        try
         {
-            if (IsNonPeer(c.RemoteIp, c.RemotePort)) // Skip listening or unset remote endpoints
-                continue;
+            foreach (var c in IpHelperApi.EnumerateTcp6Connections()) // Every IPv6 TCP row from Windows
+            {
+                if (IsNonPeer(c.RemoteIp, c.RemotePort)) // Skip listening or unset remote endpoints
+                    continue;
 
-            AddConnection(
-                seen,
-                deltas,
-                c.LocalIp,
-                c.RemoteIp,
-                c.RemotePort,
-                c.OwningPid,
-                c.DataBytesOut,
-                c.DataBytesIn,
-                "tcp6");
+                AddConnection(
+                    seen,
+                    deltas,
+                    c.LocalIp,
+                    c.RemoteIp,
+                    c.RemotePort,
+                    c.OwningPid,
+                    c.DataBytesOut,
+                    c.DataBytesIn,
+                    "tcp6");
+            }
+        }
+        catch (Exception)
+        {
+            // IPv6 table/stats APIs may be unavailable; IPv4 collection continues.
         }
 
         foreach (var stale in _last.Keys.Where(k => !seen.Contains(k)).ToList()) // Closed connections

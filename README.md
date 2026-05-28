@@ -1,6 +1,6 @@
 # Network Monitor (`netm`)
 
-A **Windows** console application that tracks **TCP** network usage over time: which applications send and receive data, which remote IPs and hostnames they talk to, and which network adapter (NIC) carries the traffic. Samples are stored in a local **SQLite** database so you can query totals and time ranges without keeping a collector running.
+A **Windows** console application that tracks **TCP** network usage over time: which applications send and receive data, which remote IPs and hostnames they talk to, and which network adapter (NIC) carries the traffic. Samples are stored in a local **SQLite** database. Start the background collector with `netm start` and query history with `netm usage`, `netm apps list`, and `netm rt`.
 
 ## Installation
 
@@ -53,6 +53,9 @@ Only these subcommands are exposed:
 
 | Command | Purpose |
 |---------|---------|
+| `netm start` | Start background traffic collector |
+| `netm stop` | Stop background collector |
+| `netm status` | Collector PID, uptime, database stats |
 | `netm info` | Database path, row counts, UTC coverage, version |
 | `netm usage` | Upload, download, and total bytes in a time range |
 | `netm usage download` | Download (received) bytes only |
@@ -67,7 +70,7 @@ Only these subcommands are exposed:
 | `--from-datetime` | today `T0000` | Range start (local) |
 | `--to-datetime` | now | Range end (local), inclusive |
 | `--include-private` | `no` | `yes` to include RFC1918/link-local traffic |
-| `--db` / `-d` | `%LocalAppData%\NetM\traffic.db` or custom path | SQLite path |
+| `--db` / `-d` | `%LocalAppData%\NetM\traffic.db` (from `configs.toml`) | SQLite path |
 
 ### Datetime format
 
@@ -95,9 +98,31 @@ netm apps list
 netm apps list --filter=chrom
 ```
 
+## Background collector
+
+After install, start recording traffic:
+
+```powershell
+netm start    # spawn background collector
+netm status   # PID, uptime, row counts
+netm stop     # stop collector
+```
+
+Configuration lives in `%LocalAppData%\NetM\configs.toml` (or `%NETM_HOME%\configs.toml` when set). Key settings:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `monitoring.sampling_interval` | `5` | Seconds between TCP samples |
+| `storage.retention_days` | `30` | Delete usage rows older than this |
+| `storage.max_size_mb` | `500` | Prune when the database file exceeds this size |
+
+Logs: `%NETM_HOME%\netm.log` (see `logging.log_file` in config).
+
 ## Examples
 
 ```powershell
+netm start
+netm status
 netm info
 
 netm usage
@@ -111,7 +136,7 @@ netm apps list --filter=edge
 
 ## Data collection
 
-Traffic must be recorded into the SQLite database before `usage` or `apps list` return data. Collection uses the same TCP/IP Helper pipeline as before (`TrafficCollector` writing minute buckets). Run your collector process or integration that populates `%LocalAppData%\NetM\traffic.db` (or a custom `--db` path).
+`netm start` runs a background process (`netm collect`) that polls TCP connections via the Windows IP Helper API (`TrafficCollector`) and writes minute buckets into SQLite (`TrafficStore`). Reporting commands read the same database; use `--db` for a non-default path.
 
 ## Requirements
 
@@ -139,7 +164,9 @@ Published **`netm-win-x64`** artifacts are built in CI (`.github/workflows/publi
 
 | Path | Role |
 |------|------|
-| `NetworkMonitor/Program.cs` | CLI (`info`, `usage`, `apps`) |
+| `NetworkMonitor/Program.cs` | CLI (`start`, `stop`, `status`, `info`, `usage`, `apps`, `rt`) |
+| `NetworkMonitor/Services/CollectionLoop.cs` | Background sampling loop |
+| `NetworkMonitor/Services/DaemonManager.cs` | PID file and process control |
 | `NetworkMonitor/Cli/` | Target parsing and datetime helpers |
 | `NetworkMonitor/Services/TrafficCollector.cs` | TCP sampling and deltas |
 | `NetworkMonitor/Storage/TrafficStore.cs` | SQLite schema and queries |

@@ -1,6 +1,7 @@
 using System.CommandLine;
 using System.Reflection;
 using NetworkMonitor.Cli;
+using NetworkMonitor.Services;
 using NetworkMonitor.Storage;
 
 namespace NetworkMonitor;
@@ -25,14 +26,14 @@ internal readonly record struct RtUsageRow(
 
 internal static class Program
 {
-  private static readonly string DefaultDbPath = Path.Combine(
-    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
-    "NetworkMonitor",
-    "traffic.db");
+  private static string DefaultDbPath => NetmConfig.Load().ResolvedDatabasePath;
 
   public static async Task<int> Main(string[] args)
   {
-    // Initialize settings and database in current directory on startup
+    if (IsCollectInvocation(args))
+      return await RunCollectAsync();
+
+    Directory.CreateDirectory(NetmPaths.Home);
     SettingsManager.Initialize();
 
     var dbOption = new Option<string>(
@@ -84,8 +85,20 @@ internal static class Program
     };
     rt.SetHandler(RunRealtime, dbOption);
 
+    var start = new Command("start", "Start background traffic collector");
+    start.SetHandler(() => DaemonManager.Start());
+
+    var stop = new Command("stop", "Stop background traffic collector");
+    stop.SetHandler(() => DaemonManager.Stop());
+
+    var status = new Command("status", "Show collector status");
+    status.SetHandler(() => DaemonManager.Status());
+
     var root = new RootCommand("Windows TCP usage monitor (netm)")
     {
+      start,
+      stop,
+      status,
       info,
       usage,
       apps,
@@ -93,6 +106,71 @@ internal static class Program
     };
 
     return await root.InvokeAsync(args);
+  }
+
+  private static bool IsCollectInvocation(string[] args) =>
+    args.Length > 0 && args[0].Equals("collect", StringComparison.OrdinalIgnoreCase);
+
+  private static async Task<int> RunCollectAsync()
+  {
+#if WINDOWS
+    SettingsManager.Initialize();
+    var config = NetmConfig.Load();
+    NetmLog.Configure(config);
+
+    var pid = Environment.ProcessId;
+    if (DaemonManager.TryReadState(out var existing) && existing.ProcessId != pid && existing.ProcessId > 0)
+    {
+      try
+      {
+        var other = System.Diagnostics.Process.GetProcessById(existing.ProcessId);
+        if (!other.HasExited && existing.ProcessId != pid)
+        {
+          NetmLog.Error($"Another collector is already running (PID {existing.ProcessId}).");
+          return 1;
+        }
+      }
+      catch (ArgumentException)
+      {
+        // Stale PID file; overwrite below.
+      }
+    }
+
+    DaemonManager.WriteState(new DaemonState(pid, DateTime.UtcNow, config.ResolvedDatabasePath));
+
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+      e.Cancel = true;
+      cts.Cancel();
+    };
+
+    AppDomain.CurrentDomain.ProcessExit += (_, _) => cts.Cancel();
+
+    try
+    {
+      using var loop = new CollectionLoop(config);
+      await loop.RunAsync(cts.Token);
+      return 0;
+    }
+    catch (OperationCanceledException)
+    {
+      return 0;
+    }
+    catch (Exception ex)
+    {
+      NetmLog.Error($"Collector exited: {ex.Message}");
+      return 1;
+    }
+    finally
+    {
+      DaemonManager.ClearState();
+    }
+#else
+    await Task.CompletedTask;
+    Console.Error.WriteLine("Traffic collection requires Windows (net10.0-windows build).");
+    return 1;
+#endif
   }
 
   private sealed record UsageOptions(

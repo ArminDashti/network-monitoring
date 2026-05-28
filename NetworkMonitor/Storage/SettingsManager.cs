@@ -4,47 +4,75 @@ namespace NetworkMonitor.Storage;
 
 internal static class SettingsManager
 {
-    private const string SettingsFileName = "settings.json";
-    private const string DatabaseFileName = "traffic.db";
     private const string EnvVarName = "NETM_DATA_PATH";
 
     public static void Initialize()
     {
-        var currentDir = Environment.CurrentDirectory;
-        var settingsPath = Path.Combine(currentDir, SettingsFileName);
-        var dbPath = Path.Combine(currentDir, DatabaseFileName);
+        var home = NetmPaths.Home;
+        Directory.CreateDirectory(home);
+        EnsureDefaultConfig(home);
 
-        // Create settings.json if it doesn't exist (no overwrite)
+        var config = NetmConfig.Load();
+        var settingsPath = NetmPaths.SettingsFile;
+        var dbPath = config.ResolvedDatabasePath;
+
         if (!File.Exists(settingsPath))
         {
             var defaultSettings = new
             {
                 databasePath = dbPath,
                 createdAt = DateTime.UtcNow.ToString("O"),
-                version = "1.0"
+                version = "1.0",
             };
 
-            var json = JsonSerializer.Serialize(defaultSettings, new JsonSerializerOptions 
-            { 
-                WriteIndented = true 
+            var json = JsonSerializer.Serialize(defaultSettings, new JsonSerializerOptions
+            {
+                WriteIndented = true,
             });
             File.WriteAllText(settingsPath, json);
         }
 
-        // Create empty SQLite database if it doesn't exist (no overwrite)
         if (!File.Exists(dbPath))
         {
             using var store = new TrafficStore(dbPath);
-            // TrafficStore constructor creates the schema automatically
         }
 
-        // Set environment variable with the data path
-        Environment.SetEnvironmentVariable(EnvVarName, currentDir, EnvironmentVariableTarget.Process);
+        Environment.SetEnvironmentVariable(EnvVarName, home, EnvironmentVariableTarget.Process);
     }
 
-    public static string GetSettingsPath() => Path.Combine(Environment.CurrentDirectory, SettingsFileName);
+    public static string GetSettingsPath() => NetmPaths.SettingsFile;
 
-    public static string GetDatabasePath() => Path.Combine(Environment.CurrentDirectory, DatabaseFileName);
+    public static string GetDatabasePath() => NetmConfig.Load().ResolvedDatabasePath;
 
     public static string? GetDataPathEnvVar() => Environment.GetEnvironmentVariable(EnvVarName);
+
+    private static void EnsureDefaultConfig(string home)
+    {
+        var dest = Path.Combine(home, "configs.toml");
+        if (File.Exists(dest))
+            return;
+
+        var bundled = Path.Combine(AppContext.BaseDirectory, "configs.toml");
+        if (File.Exists(bundled))
+        {
+            File.Copy(bundled, dest);
+            return;
+        }
+
+        File.WriteAllText(dest, """
+            database_path = "%NETM_HOME%\\traffic.db"
+
+            [monitoring]
+            enabled = true
+            sampling_interval = 5
+
+            [storage]
+            max_size_mb = 500
+            retention_days = 30
+
+            [logging]
+            level = "Info"
+            log_file = "%NETM_HOME%\\netm.log"
+            """);
+    }
 }

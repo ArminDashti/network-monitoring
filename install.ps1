@@ -268,7 +268,7 @@ if (Test-Path $NetmExe) {
         Write-Info "  - configs.toml (Configuration file)"
     }
     Write-Info ""
-    Write-Info "Run 'netm info' to verify the installation"
+    Write-Info "Run 'netm start' to begin recording traffic, then 'netm status' or 'netm info'"
     Write-Info "Use 'sqlite3.exe' to manage the SQLite database directly"
     if (-not ($AddToPath -or $SetEnvVars)) {
         Write-Info ""
