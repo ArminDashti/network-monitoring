@@ -4,48 +4,32 @@ A **Windows** console application that tracks **TCP** network usage over time: w
 
 ## Installation
 
-### From GitHub Releases (Recommended)
-
-Download and run the installer script from an elevated PowerShell terminal:
+From the repository root, run the installer in an elevated PowerShell terminal (Administrator required for the Windows service):
 
 ```powershell
-# Install latest version to %LocalAppData%\NetM with configs.toml
-iwr -useb https://raw.githubusercontent.com/ArminDashti/network-monitoring/main/install.ps1 | iex
+# Build and publish to .\NetworkMonitoring
+.\install.ps1
 
-# Install specific version
-iwr -useb https://raw.githubusercontent.com/ArminDashti/network-monitoring/main/install.ps1 | iex -Args "-Version v1.0.0"
+# Custom install directory
+.\install.ps1 --path=C:\Tools\NetM
 
-# Install and add to PATH, set NETM_HOME environment variable
-iwr -useb https://raw.githubusercontent.com/ArminDashti/network-monitoring/main/install.ps1 | iex -Args "-SetEnvVars"
+# Binaries only (skip Windows service install)
+.\install.ps1 -SkipService
 ```
 
 The installer will:
-- Create `%LocalAppData%\NetM` folder
-- Download `netm.exe` to that folder
-- Download `sqlite3.exe` (SQLite CLI tool) to that folder
-- Create a default `configs.toml` configuration file
-- Optionally add the folder to your PATH and set `NETM_HOME` environment variable
+- Stop the NetM Windows service if it is running
+- Delete all files in the install directory (default `.\NetworkMonitoring`, or `--path=<dir>`)
+- Build and publish `netm.exe` from the local source into that directory
+- Copy `configs.toml` from the repository (or create defaults)
+- Optionally download `sqlite3.exe` (SQLite CLI from sqlite.org)
+- Add the folder to your user PATH and set `NETM_HOME`
+- Install and start the NetM Windows service by default when run as Administrator
 
-After installation with `-SetEnvVars`, you can use:
+After installation, you can use:
 - `netm` command directly in PowerShell
 - `sqlite3.exe` to manage the database directly
 - `$env:NETM_HOME` to access the installation directory
-
-### Build from Source
-
-```powershell
-# Clone and build from source
-iwr -useb https://raw.githubusercontent.com/ArminDashti/network-monitoring/main/install.ps1 | iex -Args "-BuildFromSource"
-
-# Build from source and configure environment variables
-iwr -useb https://raw.githubusercontent.com/ArminDashti/network-monitoring/main/install.ps1 | iex -Args "-BuildFromSource", "-SetEnvVars"
-```
-
-### Manual Installation
-
-1. Download the latest release from [GitHub Releases](https://github.com/ArminDashti/network-monitoring/releases)
-2. Extract `netm.exe` and `configs.toml` to `%LocalAppData%\NetM`
-3. Optionally add the installation directory to your PATH and set `NETM_HOME` environment variable
 
 ## Commands
 
@@ -147,7 +131,7 @@ netm service status
 `install.ps1` installs and starts the service by default when run as Administrator. Use `-SkipService` to install binaries only.
 
 ```powershell
-iwr -useb https://raw.githubusercontent.com/ArminDashti/network-monitoring/main/install.ps1 | iex -Args "-SetEnvVars"
+.\install.ps1 -SetEnvVars
 ```
 
 Stop or remove the service:
@@ -163,13 +147,13 @@ Query traffic in any terminal: `netm usage`, `netm apps list`, `netm rt`.
 
 Default database: `%LocalAppData%\NetM\traffic.db` (override with `--db` on `service install` or `NETM_HOME`).
 
-## Quick start (from source)
+## Quick start
 
 ```powershell
 git clone https://github.com/ArminDashti/network-monitoring.git
 cd network-monitoring
 # Elevated PowerShell for daemon install:
-.\install.ps1 -BuildFromSource -SetEnvVars
+.\install.ps1 -SetEnvVars
 # Restart terminal, then:
 netm service status
 netm info
@@ -199,7 +183,11 @@ netm usage --target=apps
 dotnet build NetworkMonitor\NetworkMonitor.csproj -c Release
 ```
 
-Published **`netm-win-x64`** artifacts are built in CI (`.github/workflows/publish-windows-exe.yml`).
+To publish a self-contained Windows executable:
+
+```powershell
+dotnet publish NetworkMonitor\NetworkMonitor.csproj -c Release -f net9.0-windows -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o .\publish
+```
 
 ## Project layout
 
