@@ -172,6 +172,19 @@ log_file = "%NETM_HOME%\\netm.log"
     Write-Success "Created default configuration file at $ConfigPath"
 }
 
+function Get-SqliteToolsAssetPath {
+    param([string]$Architecture)
+
+    $AssetsDir = Join-Path $PSScriptRoot "assets"
+    if (-not (Test-Path $AssetsDir)) {
+        return $null
+    }
+
+    return Get-ChildItem -Path $AssetsDir -Filter "sqlite-tools-win-$Architecture*.zip" -File -ErrorAction SilentlyContinue |
+        Sort-Object Name -Descending |
+        Select-Object -First 1
+}
+
 function Install-SqliteCli {
     param(
         [string]$TargetDir,
@@ -179,25 +192,30 @@ function Install-SqliteCli {
     )
 
     Write-Info "Installing SQLite CLI tool..."
-    $SqliteUrl = "https://www.sqlite.org/2024/sqlite-tools-win-$Architecture-3480000.zip"
-    $SqliteDownloadPath = Join-Path $env:TEMP "sqlite-tools.zip"
+    $SqliteZip = Get-SqliteToolsAssetPath -Architecture $Architecture
+    if (-not $SqliteZip) {
+        Write-Host "[WARN] SQLite bundle not found at assets\sqlite-tools-win-$Architecture*.zip. Continuing without sqlite3.exe..." -ForegroundColor Yellow
+        return
+    }
 
+    $SqliteTempDir = Join-Path $env:TEMP "sqlite-extract-$((Get-Random))"
     try {
-        Invoke-WebRequest -Uri $SqliteUrl -OutFile $SqliteDownloadPath
-        $SqliteTempDir = Join-Path $env:TEMP "sqlite-extract-$((Get-Random))"
-        Expand-Archive -Path $SqliteDownloadPath -DestinationPath $SqliteTempDir -Force
+        Write-Info "Extracting SQLite from $($SqliteZip.FullName)..."
+        Expand-Archive -Path $SqliteZip.FullName -DestinationPath $SqliteTempDir -Force
 
         $SqliteExe = Get-ChildItem -Path $SqliteTempDir -Filter "sqlite3.exe" -Recurse | Select-Object -First 1
-        if ($SqliteExe) {
-            Copy-Item -Path $SqliteExe.FullName -Destination (Join-Path $TargetDir "sqlite3.exe") -Force
-            Write-Success "SQLite CLI tool installed at $(Join-Path $TargetDir 'sqlite3.exe')"
+        if (-not $SqliteExe) {
+            throw "sqlite3.exe not found in $($SqliteZip.Name)."
         }
 
-        Remove-Item $SqliteDownloadPath -Force -ErrorAction SilentlyContinue
-        Remove-Item -Recurse -Force $SqliteTempDir -ErrorAction SilentlyContinue
+        Copy-Item -Path $SqliteExe.FullName -Destination (Join-Path $TargetDir "sqlite3.exe") -Force
+        Write-Success "SQLite CLI tool installed at $(Join-Path $TargetDir 'sqlite3.exe')"
     }
     catch {
-        Write-Info "SQLite download failed, continuing without it..."
+        Write-Host "[WARN] SQLite install failed: $($_.Exception.Message). Continuing without sqlite3.exe..." -ForegroundColor Yellow
+    }
+    finally {
+        Remove-Item -Recurse -Force $SqliteTempDir -ErrorAction SilentlyContinue
     }
 }
 
