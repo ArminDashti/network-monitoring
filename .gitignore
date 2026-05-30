@@ -1,4 +1,8 @@
 ```
+# Installer assets (downloaded once by install.ps1)
+assets/*
+!assets/.gitkeep
+
 # Build artifacts
 *.exe
 *.dll

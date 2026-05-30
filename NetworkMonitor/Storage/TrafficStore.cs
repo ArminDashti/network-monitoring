@@ -210,6 +210,13 @@ internal sealed class TrafficStore : IDisposable
         return list;
     }
 
+    public long ClearAllUsage()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "DELETE FROM usage;";
+        return cmd.ExecuteNonQuery();
+    }
+
     public long PruneOlderThanUtc(string cutoffUtcInclusive)
     {
         using var cmd = _connection.CreateCommand();

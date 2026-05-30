@@ -81,11 +81,18 @@ internal static class Program
     var status = new Command("status", "Show collector status");
     status.SetHandler(() => DaemonManager.Status());
 
+    var reset = new Command("reset", "Delete all sampling data from the database")
+    {
+      dbOption,
+    };
+    reset.SetHandler(RunReset, dbOption);
+
     var root = new RootCommand("Windows TCP usage monitor (netm)")
     {
       start,
       stop,
       status,
+      reset,
       info,
       usage,
       apps,
@@ -299,6 +306,14 @@ internal static class Program
     Console.WriteLine("Stop:    netm service stop");
   }
 #endif
+
+  private static void RunReset(string dbPath)
+  {
+    using var store = new TrafficStore(dbPath);
+    var deleted = store.ClearAllUsage();
+    store.Vacuum();
+    Console.WriteLine($"Deleted {deleted:N0} sampling rows from {Path.GetFullPath(dbPath)}.");
+  }
 
   private static void RunInfo(string dbPath)
   {

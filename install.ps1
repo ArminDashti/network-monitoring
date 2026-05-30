@@ -172,6 +172,61 @@ log_file = "%NETM_HOME%\\netm.log"
     Write-Success "Created default configuration file at $ConfigPath"
 }
 
+function Get-AssetsDirectory {
+    $assetsDir = Join-Path $PSScriptRoot "assets"
+    if (-not (Test-Path $assetsDir)) {
+        New-Item -ItemType Directory -Path $assetsDir | Out-Null
+        Write-Info "Created assets directory: $assetsDir"
+    }
+    return $assetsDir
+}
+
+function Ensure-SqliteCliAsset {
+    param([string]$Architecture)
+
+    $AssetsDir = Get-AssetsDirectory
+    $SqliteVersion = "3530100"
+    $ZipName = "sqlite-tools-win-$Architecture-$SqliteVersion.zip"
+    $SqliteZipPath = Join-Path $AssetsDir $ZipName
+    $SqliteExePath = Join-Path $AssetsDir "sqlite3-$Architecture.exe"
+
+    if (Test-Path $SqliteExePath) {
+        Write-Info "Using cached SQLite CLI from $SqliteExePath"
+        return $SqliteExePath
+    }
+
+    try {
+        if (-not (Test-Path $SqliteZipPath)) {
+            $SqliteUrl = "https://www.sqlite.org/2026/$ZipName"
+            Write-Info "Downloading SQLite CLI to ./assets (one-time)..."
+            Invoke-WebRequest -Uri $SqliteUrl -OutFile $SqliteZipPath
+            Write-Success "Saved $ZipName to ./assets"
+        }
+        else {
+            Write-Info "Using cached SQLite archive: $SqliteZipPath"
+        }
+
+        $SqliteExtractDir = Join-Path $AssetsDir "sqlite-extract-$Architecture"
+        if (-not (Test-Path $SqliteExtractDir)) {
+            Expand-Archive -Path $SqliteZipPath -DestinationPath $SqliteExtractDir -Force
+        }
+
+        $SqliteExe = Get-ChildItem -Path $SqliteExtractDir -Filter "sqlite3.exe" -Recurse | Select-Object -First 1
+        if (-not $SqliteExe) {
+            Write-Host "[WARN] sqlite3.exe not found in $SqliteExtractDir" -ForegroundColor Yellow
+            return $null
+        }
+
+        Copy-Item -Path $SqliteExe.FullName -Destination $SqliteExePath -Force
+        Write-Success "Cached SQLite CLI at $SqliteExePath"
+        return $SqliteExePath
+    }
+    catch {
+        Write-Info "SQLite download failed, continuing without it..."
+        return $null
+    }
+}
+
 function Install-SqliteCli {
     param(
         [string]$TargetDir,
@@ -179,26 +234,14 @@ function Install-SqliteCli {
     )
 
     Write-Info "Installing SQLite CLI tool..."
-    $SqliteUrl = "https://www.sqlite.org/2024/sqlite-tools-win-$Architecture-3480000.zip"
-    $SqliteDownloadPath = Join-Path $env:TEMP "sqlite-tools.zip"
-
-    try {
-        Invoke-WebRequest -Uri $SqliteUrl -OutFile $SqliteDownloadPath
-        $SqliteTempDir = Join-Path $env:TEMP "sqlite-extract-$((Get-Random))"
-        Expand-Archive -Path $SqliteDownloadPath -DestinationPath $SqliteTempDir -Force
-
-        $SqliteExe = Get-ChildItem -Path $SqliteTempDir -Filter "sqlite3.exe" -Recurse | Select-Object -First 1
-        if ($SqliteExe) {
-            Copy-Item -Path $SqliteExe.FullName -Destination (Join-Path $TargetDir "sqlite3.exe") -Force
-            Write-Success "SQLite CLI tool installed at $(Join-Path $TargetDir 'sqlite3.exe')"
-        }
-
-        Remove-Item $SqliteDownloadPath -Force -ErrorAction SilentlyContinue
-        Remove-Item -Recurse -Force $SqliteTempDir -ErrorAction SilentlyContinue
+    $SqliteExePath = Ensure-SqliteCliAsset -Architecture $Architecture
+    if (-not $SqliteExePath) {
+        return
     }
-    catch {
-        Write-Info "SQLite download failed, continuing without it..."
-    }
+
+    $TargetExe = Join-Path $TargetDir "sqlite3.exe"
+    Copy-Item -Path $SqliteExePath -Destination $TargetExe -Force
+    Write-Success "SQLite CLI tool installed at $TargetExe"
 }
 
 $Arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }

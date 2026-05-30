@@ -9,6 +9,7 @@ This file provides a quick reference for the `netm` CLI commands.
 | `netm start` | Start the background traffic collector. |
 | `netm stop` | Stop the background traffic collector. |
 | `netm status` | Show whether the collector is running (PID, uptime, DB stats). |
+| `netm reset` | Delete all sampling data from the traffic database. |
 | `netm service install` | Install the NetM Windows service (Administrator required). |
 | `netm service uninstall` | Remove the NetM Windows service (Administrator required). |
 | `netm service start` | Start the NetM Windows service (daemon collection). |
@@ -43,6 +44,7 @@ This file provides a quick reference for the `netm` CLI commands.
 netm start
 netm status
 netm stop
+netm reset
 # Daemon mode (required for collection)
 netm service install
 netm service start
