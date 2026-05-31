@@ -22,7 +22,7 @@ The installer will:
 - Delete all files in the install directory (default `.\NetworkMonitoring`, or `--path=<dir>`)
 - Build and publish `netm.exe` from the local source into that directory
 - Copy `configs.toml` from the repository (or create defaults)
-- Optionally download `sqlite3.exe` (SQLite CLI from sqlite.org)
+- Extract `sqlite3.exe` from the bundled SQLite tools zip in `assets/`
 - Add the folder to your user PATH and set `NETM_HOME`
 - Install and start the NetM Windows service by default when run as Administrator
 
