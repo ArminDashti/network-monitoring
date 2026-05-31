@@ -1,19 +1,19 @@
 # Network Monitor — key points
 
 ## Data directory
-- Default install path: `.\NetworkMonitoring\` via `install.ps1` (override with `--path=<dir>` or `-InstallDir`).
+- Default install path: `.\NetworkMonitoringExport\` via `export.ps1` (override with `--path=<dir>` or `-InstallDir`).
 - Legacy/default data dir when not using installer: `%LocalAppData%\NetM\` (`traffic.db`, `settings.json`).
 - Override with `NETM_HOME` environment variable.
 
 ## Commands
 - Collection is **daemon-only**: `netm service install` / `start` (Windows service). Foreground `collect` removed.
 - `netm info`, `netm usage`, `netm apps list`, `netm rt` — query SQLite.
-- `install.ps1` stops NetM service, wipes install dir, publishes, sets PATH/NETM_HOME, then installs/starts service when elevated; `-SkipService` for binaries only.
+- `export.ps1` stops NetM service, wipes install dir, publishes, sets PATH/NETM_HOME, then installs/starts service when elevated; `-SkipService` for binaries only.
 
 ## Build
 - Target frameworks: `net9.0` (portable queries) and `net9.0-windows` (TCP collection).
 - Build Windows CLI: `dotnet build NetworkMonitor/NetworkMonitor.csproj -c Release -f net9.0-windows`
-- `install.ps1` always `dotnet publish`s from the local repo into `.\NetworkMonitoring` (no GitHub release download).
+- `export.ps1` always `dotnet publish`s from the local repo into `.\NetworkMonitoringExport` (no GitHub release download).
 
 ## Windows APIs
 - IPv6 TCP table APIs are optional (skipped when exports missing from `iphlpapi.dll`).

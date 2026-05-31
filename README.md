@@ -7,19 +7,19 @@ A **Windows** console application that tracks **TCP** network usage over time: w
 From the repository root, run the installer in an elevated PowerShell terminal (Administrator required for the Windows service):
 
 ```powershell
-# Build and publish to .\NetworkMonitoring
-.\install.ps1
+# Build and publish to .\NetworkMonitoringExport
+.\export.ps1
 
 # Custom install directory
-.\install.ps1 --path=C:\Tools\NetM
+.\export.ps1 --path=C:\Tools\NetM
 
 # Binaries only (skip Windows service install)
-.\install.ps1 -SkipService
+.\export.ps1 -SkipService
 ```
 
 The installer will:
 - Stop the NetM Windows service if it is running
-- Delete all files in the install directory (default `.\NetworkMonitoring`, or `--path=<dir>`)
+- Delete all files in the install directory (default `.\NetworkMonitoringExport`, or `--path=<dir>`)
 - Build and publish `netm.exe` from the local source into that directory
 - Copy `configs.toml` from the repository (or create defaults)
 - Extract `sqlite3.exe` from the bundled SQLite tools zip in `assets/`
@@ -129,10 +129,10 @@ netm service start
 netm service status
 ```
 
-`install.ps1` installs and starts the service by default when run as Administrator. Use `-SkipService` to install binaries only.
+`export.ps1` installs and starts the service by default when run as Administrator. Use `-SkipService` to install binaries only.
 
 ```powershell
-.\install.ps1 -SetEnvVars
+.\export.ps1 -SetEnvVars
 ```
 
 Stop or remove the service:
@@ -154,7 +154,7 @@ Default database: `%LocalAppData%\NetM\traffic.db` (override with `--db` on `ser
 git clone https://github.com/ArminDashti/network-monitoring.git
 cd network-monitoring
 # Elevated PowerShell for daemon install:
-.\install.ps1 -SetEnvVars
+.\export.ps1 -SetEnvVars
 # Restart terminal, then:
 netm service status
 netm info

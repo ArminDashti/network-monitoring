@@ -1,5 +1,5 @@
 ```
-# Installer assets (downloaded once by install.ps1)
+# Exporter assets (downloaded once by export.ps1)
 assets/*
 !assets/.gitkeep
 
