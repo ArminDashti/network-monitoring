@@ -423,6 +423,9 @@ internal static class IpHelperApi
                 var localPort = NetworkOrderPort(row.LocalPort); // Host-order local port
                 var remotePort = NetworkOrderPort(row.RemotePort); // Host-order remote port
 
+                if (row.State != MibTcpStateEstablished)
+                    continue;
+
                 var mib = new MibTcpRow // Row shape needed by stats API
                 {
                     State = row.State,
@@ -432,13 +435,8 @@ internal static class IpHelperApi
                     RemotePort = row.RemotePort,
                 };
 
-                ulong bytesOut = 0;
-                ulong bytesIn = 0;
-                if (TryGetTcp4DataStats(ref mib, out var estats))
-                {
-                    bytesOut = estats.DataBytesOut;
-                    bytesIn = estats.DataBytesIn;
-                }
+                if (!TryGetTcp4DataStats(ref mib, out var estats))
+                    continue;
 
                 result.Add(new Tcp4ConnectionSnapshot(
                     row.State,
@@ -447,8 +445,8 @@ internal static class IpHelperApi
                     remoteIp,
                     remotePort,
                     row.OwningPid,
-                    bytesOut,
-                    bytesIn));
+                    estats.DataBytesOut,
+                    estats.DataBytesIn));
             }
         }
         finally

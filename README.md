@@ -40,7 +40,7 @@ Only these subcommands are exposed:
 | `netm start` | Start background traffic collector |
 | `netm stop` | Stop background collector |
 | `netm status` | Collector PID, uptime, database stats |
-| `netm reset` | Delete all sampling data from the traffic database |
+| `netm reset` | Remove the traffic database and restart the collector (fresh in-memory counters) |
 | `netm service` | Install/start/stop the NetM Windows service (daemon mode — required for collection) |
 | `netm info` | Database path, row counts, UTC coverage, version |
 | `netm usage` | Upload, download, and total bytes in a time range |

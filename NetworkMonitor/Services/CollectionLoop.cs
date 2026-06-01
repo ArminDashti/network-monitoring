@@ -13,7 +13,7 @@ internal sealed class CollectionLoop : IDisposable
     public CollectionLoop(NetmConfig config)
     {
         _config = config;
-        _store = new TrafficStore(config.ResolvedDatabasePath);
+        _store = new TrafficStore(config.ResolvedDatabasePath, config.SamplingIntervalSeconds);
         _collector = new TrafficCollector(new NicResolver(), new HostNameCache());
         NetmLog.Configure(config);
     }

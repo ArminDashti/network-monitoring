@@ -31,7 +31,7 @@ internal static class CompactDateTime
     var normalized = NormalizeInput(raw);
     if (!DateTime.TryParseExact(normalized, Format, CultureInfo.InvariantCulture, DateTimeStyles.None, out var parsed))
     {
-      Console.Error.WriteLine($"Invalid datetime '{raw}'. Expected {Format} (local time). Date-only (yyMMdd) uses T0000.");
+      ConsoleUi.WriteError($"Invalid datetime '{raw}'. Expected {Format} (local time). Date-only (yyMMdd) uses T0000.");
       Environment.Exit(1);
       return default;
     }

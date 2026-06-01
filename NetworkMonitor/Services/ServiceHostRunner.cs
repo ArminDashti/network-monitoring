@@ -2,6 +2,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
+using NetworkMonitor.Cli;
 using NetworkMonitor.Storage;
 
 namespace NetworkMonitor.Services;
@@ -32,7 +33,7 @@ internal static class ServiceHostRunner
 
         if (intervalSeconds < 1)
         {
-            Console.Error.WriteLine("Interval must be at least 1 second.");
+            ConsoleUi.WriteError("Interval must be at least 1 second.");
             return 1;
         }
 

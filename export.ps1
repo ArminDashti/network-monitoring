@@ -25,7 +25,7 @@ if (-not $InstallDir) {
         $InstallDir = $PathFromArgs
     }
     else {
-        $InstallDir = Join-Path (Get-Location).Path "NetworkMonitoringExport"
+        $InstallDir = Join-Path $PSScriptRoot "NetworkMonitoringExport"
     }
 }
 $InstallDir = [System.IO.Path]::GetFullPath($InstallDir)
@@ -46,49 +46,238 @@ function Write-Error-Exit {
     exit 1
 }
 
+function Test-IsAdministrator {
+    $principal = [Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()
+    return $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+}
+
+function Test-InstallDirectoryInUse {
+    param([string]$InstallDirectory)
+
+    $netmExe = Join-Path $InstallDirectory "netm.exe"
+    if ((Test-Path $netmExe) -and -not (Test-FileUnlocked -Path $netmExe)) {
+        return $true
+    }
+
+    return $false
+}
+
+function Wait-NetMServiceStatus {
+    param(
+        [string]$ServiceName,
+        [ValidateSet("Running", "Stopped")]
+        [string]$DesiredStatus,
+        [int]$TimeoutSeconds = 30
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        $service = Get-Service -Name $ServiceName -ErrorAction SilentlyContinue
+        if (-not $service) {
+            return $DesiredStatus -eq "Stopped"
+        }
+
+        if ($service.Status.ToString() -eq $DesiredStatus) {
+            return $true
+        }
+
+        Start-Sleep -Milliseconds 250
+    }
+
+    return $false
+}
+
+function Test-FileUnlocked {
+    param([string]$Path)
+
+    if (-not (Test-Path $Path)) {
+        return $true
+    }
+
+    try {
+        $stream = [System.IO.File]::Open(
+            $Path,
+            [System.IO.FileMode]::Open,
+            [System.IO.FileAccess]::Read,
+            [System.IO.FileShare]::None)
+        $stream.Dispose()
+        return $true
+    }
+    catch {
+        return $false
+    }
+}
+
+function Wait-ForFileUnlocked {
+    param(
+        [string]$Path,
+        [int]$TimeoutSeconds = 15
+    )
+
+    $deadline = (Get-Date).AddSeconds($TimeoutSeconds)
+    while ((Get-Date) -lt $deadline) {
+        if (Test-FileUnlocked -Path $Path) {
+            return $true
+        }
+
+        Start-Sleep -Milliseconds 500
+    }
+
+    return $false
+}
+
+function Stop-NetmProcessesInDirectory {
+    param([string]$InstallDirectory)
+
+    $netmExe = Join-Path $InstallDirectory "netm.exe"
+    if (-not (Test-Path $netmExe)) {
+        return
+    }
+
+    $resolvedExe = [System.IO.Path]::GetFullPath($netmExe)
+    Write-Info "Stopping netm processes using $resolvedExe..."
+
+    & $resolvedExe stop 2>$null | Out-Null
+    & $resolvedExe service stop 2>$null | Out-Null
+
+    $stoppedAny = $false
+    $processes = @(Get-CimInstance Win32_Process -Filter "Name = 'netm.exe'" -ErrorAction SilentlyContinue)
+    foreach ($proc in $processes) {
+        $shouldStop = $false
+
+        if ($proc.ExecutablePath) {
+            try {
+                $procPath = [System.IO.Path]::GetFullPath($proc.ExecutablePath)
+                $shouldStop = $procPath -ieq $resolvedExe
+            }
+            catch {
+                $shouldStop = $false
+            }
+        }
+        elseif ($proc.CommandLine -and $proc.CommandLine -like "*$resolvedExe*") {
+            $shouldStop = $true
+        }
+
+        if ($shouldStop) {
+            Write-Info "Stopping netm.exe (PID $($proc.ProcessId))..."
+            Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+            $stoppedAny = $true
+        }
+    }
+
+    foreach ($proc in @(Get-Process -Name netm -ErrorAction SilentlyContinue)) {
+        $procPath = $null
+        try {
+            $procPath = $proc.Path
+        }
+        catch {
+            # Path is unavailable without elevation; handled by fallback below.
+        }
+
+        if ($procPath) {
+            try {
+                if ([System.IO.Path]::GetFullPath($procPath) -ieq $resolvedExe) {
+                    Write-Info "Stopping netm.exe (PID $($proc.Id))..."
+                    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                    $stoppedAny = $true
+                }
+            }
+            catch {
+                continue
+            }
+        }
+    }
+
+    if (-not $stoppedAny -and (Test-Path $netmExe) -and -not (Test-FileUnlocked -Path $netmExe)) {
+        $running = @(Get-Process -Name netm -ErrorAction SilentlyContinue)
+        if ($running.Count -gt 0) {
+            Write-Host "[WARN] Stopping $($running.Count) netm process(es) so install files can be replaced..." -ForegroundColor Yellow
+            foreach ($proc in $running) {
+                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+                if (Test-IsAdministrator) {
+                    $null = & taskkill.exe /F /PID $proc.Id 2>&1
+                }
+            }
+        }
+    }
+
+    Start-Sleep -Milliseconds 500
+}
+
+function Assert-CanReplaceInstallDirectory {
+    param([string]$InstallDirectory)
+
+    if (-not (Test-InstallDirectoryInUse -InstallDirectory $InstallDirectory)) {
+        return
+    }
+
+    if (Test-IsAdministrator) {
+        return
+    }
+
+    $netmExe = Join-Path $InstallDirectory "netm.exe"
+    $service = Get-Service -Name "NetM" -ErrorAction SilentlyContinue
+    $runningCount = @(Get-Process -Name netm -ErrorAction SilentlyContinue).Count
+
+    $reason = if ($service -and $service.Status -ne "Stopped") {
+        "The NetM Windows service is installed and must be stopped before export can replace files."
+    }
+    elseif ($runningCount -gt 0) {
+        "A netm.exe process (PID may require elevation to see) is still running and has $netmExe open."
+    }
+    else {
+        "Install files in $InstallDirectory are locked."
+    }
+
+    Write-Error-Exit "$reason Re-run export.ps1 in an elevated PowerShell window (Run as administrator)."
+}
+
 function Remove-NetMServiceIfPresent {
     param([string]$InstallDirectory)
 
     $serviceName = "NetM"
     $netmExe = Join-Path $InstallDirectory "netm.exe"
     $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
-    if (-not $service) {
-        return
-    }
 
-    if (Test-Path $netmExe) {
-        if ($service.Status -eq "Running") {
+    if ($service) {
+        if ($service.Status -notin @("Stopped", "StopPending")) {
             Write-Info "Stopping '$serviceName' Windows service (Network Monitor)..."
-            & $netmExe service stop | Out-Null
-            if ($LASTEXITCODE -ne 0) {
-                Write-Host "[WARN] netm service stop returned exit code $LASTEXITCODE; trying Stop-Service..." -ForegroundColor Yellow
-                Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+            if (Test-Path $netmExe) {
+                & $netmExe service stop 2>$null | Out-Null
+            }
+
+            Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+            if (Wait-NetMServiceStatus -ServiceName $serviceName -DesiredStatus Stopped) {
+                Write-Success "Stopped '$serviceName' service."
             }
             else {
-                Write-Success "Stopped '$serviceName' service."
+                Write-Host "[WARN] '$serviceName' did not stop in time; files may stay locked." -ForegroundColor Yellow
             }
         }
 
         Write-Info "Removing existing '$serviceName' Windows service registration..."
-        & $netmExe service uninstall | Out-Null
-        if ($LASTEXITCODE -eq 0) {
-            Write-Success "Removed '$serviceName' service."
-            return
+        if (Test-Path $netmExe) {
+            & $netmExe service uninstall 2>$null | Out-Null
         }
 
-        Write-Host "[WARN] netm service uninstall returned exit code $LASTEXITCODE; trying sc.exe delete..." -ForegroundColor Yellow
-    }
-    elseif ($service.Status -eq "Running") {
-        Write-Info "Stopping '$serviceName' Windows service..."
-        Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+        if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
+            $null = & sc.exe stop $serviceName 2>&1
+            Start-Sleep -Seconds 2
+            $null = & sc.exe delete $serviceName 2>&1
+        }
+
+        if (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue)) {
+            Write-Success "Removed '$serviceName' service."
+        }
+        else {
+            Write-Host "[WARN] Could not remove '$serviceName' service. Re-run export.ps1 as Administrator." -ForegroundColor Yellow
+        }
     }
 
-    $null = & sc.exe delete $serviceName 2>&1
-    if (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue)) {
-        Write-Success "Removed '$serviceName' service."
-    }
-    else {
-        Write-Host "[WARN] Could not remove '$serviceName' service. Re-run as Administrator if install fails." -ForegroundColor Yellow
+    Stop-NetmProcessesInDirectory -InstallDirectory $InstallDirectory
+
+    if ((Test-Path $netmExe) -and -not (Wait-ForFileUnlocked -Path $netmExe)) {
+        Write-Host "[WARN] $netmExe is still in use. Re-run export.ps1 as Administrator or stop NetM manually." -ForegroundColor Yellow
     }
 }
 
@@ -99,9 +288,31 @@ function Clear-InstallDirectory {
         return
     }
 
+    $netmExe = Join-Path $Dir "netm.exe"
+    $maxAttempts = 5
+
     Write-Info "Deleting all files in $Dir..."
-    Get-ChildItem -Path $Dir -Force | Remove-Item -Recurse -Force -ErrorAction Stop
-    Write-Success "Cleared install directory."
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        try {
+            Get-ChildItem -Path $Dir -Force | Remove-Item -Recurse -Force -ErrorAction Stop
+            Write-Success "Cleared install directory."
+            return
+        }
+        catch {
+            if ($attempt -eq $maxAttempts) {
+                Assert-CanReplaceInstallDirectory -InstallDirectory $Dir
+                throw
+            }
+
+            Write-Host "[WARN] Could not delete all files (attempt $attempt/$maxAttempts): $($_.Exception.Message)" -ForegroundColor Yellow
+            Stop-NetmProcessesInDirectory -InstallDirectory $Dir
+            if (Test-Path $netmExe) {
+                $null = Wait-ForFileUnlocked -Path $netmExe -TimeoutSeconds 5
+            }
+
+            Start-Sleep -Seconds 1
+        }
+    }
 }
 
 function Update-InstallEnvironmentVariables {
@@ -248,7 +459,17 @@ $Arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
 Write-Info "Install directory: $InstallDir"
 Write-Info "Detected architecture: $Arch"
 
+$hasExistingInstall = (Test-Path $InstallDir) -and ((Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0)
+if ($hasExistingInstall -and -not (Test-IsAdministrator)) {
+    $service = Get-Service -Name "NetM" -ErrorAction SilentlyContinue
+    $netmRunning = @(Get-Process -Name netm -ErrorAction SilentlyContinue).Count -gt 0
+    if (($service -and $service.Status -ne "Stopped") -or $netmRunning) {
+        Write-Error-Exit "An existing NetM install is running. Re-run export.ps1 in an elevated PowerShell window (Run as administrator) so netm.exe can be stopped and replaced."
+    }
+}
+
 Remove-NetMServiceIfPresent -InstallDirectory $InstallDir
+Assert-CanReplaceInstallDirectory -InstallDirectory $InstallDir
 Clear-InstallDirectory -Dir $InstallDir
 
 if (-not (Test-Path $InstallDir)) {

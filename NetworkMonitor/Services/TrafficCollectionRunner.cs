@@ -15,7 +15,7 @@ internal static class TrafficCollectionRunner
         if (intervalSeconds < 1)
             throw new ArgumentOutOfRangeException(nameof(intervalSeconds), "Interval must be at least 1 second.");
 
-        using var store = new TrafficStore(dbPath);
+        using var store = new TrafficStore(dbPath, intervalSeconds);
         var collector = new TrafficCollector(new NicResolver(), new HostNameCache());
 
         logInfo?.Invoke($"Collecting TCP traffic → {Path.GetFullPath(dbPath)}");

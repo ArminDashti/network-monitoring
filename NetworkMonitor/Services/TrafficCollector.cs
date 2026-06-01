@@ -33,6 +33,7 @@ internal sealed class TrafficCollector
                 seen,
                 deltas,
                 c.LocalIp,
+                c.LocalPort,
                 c.RemoteIp,
                 c.RemotePort,
                 c.OwningPid,
@@ -52,6 +53,7 @@ internal sealed class TrafficCollector
                     seen,
                     deltas,
                     c.LocalIp,
+                    c.LocalPort,
                     c.RemoteIp,
                     c.RemotePort,
                     c.OwningPid,
@@ -76,6 +78,7 @@ internal sealed class TrafficCollector
         HashSet<string> seen,
         List<TrafficDelta> deltas,
         IPAddress localIp,
+        ushort localPort,
         IPAddress remoteIp,
         ushort remotePort,
         uint owningPid,
@@ -85,19 +88,23 @@ internal sealed class TrafficCollector
     {
         var nic = _nics.ResolveNicName(localIp); // Which adapter this socket uses
         var remoteKey = remoteIp.ToString(); // Text form for storage and display
-        var key = $"{familyTag}|{localIp}|{remoteKey}|{remotePort}"; // Unique key per connection
+        var key = $"{familyTag}|{localIp}|{localPort}|{remoteKey}|{remotePort}"; // Unique per socket (local + remote)
         seen.Add(key); // Mark as active in this sample
 
-        var prevOut = 0UL; // Previous outbound counter for this key
-        var prevIn = 0UL; // Previous inbound counter for this key
-        if (_last.TryGetValue(key, out var prev)) // We saw this connection before
+        if (!_last.TryGetValue(key, out var prev))
         {
-            prevOut = prev.Out;
-            prevIn = prev.In;
+            _last[key] = (bytesOut, bytesIn); // Baseline only; no bytes attributed to this bucket yet
+            return;
         }
 
-        var deltaOut = Delta(bytesOut, prevOut); // Bytes sent since last sample
-        var deltaIn = Delta(bytesIn, prevIn); // Bytes received since last sample
+        if (bytesOut < prev.Out || bytesIn < prev.In)
+        {
+            _last[key] = (bytesOut, bytesIn); // Counter reset; re-baseline without attributing traffic
+            return;
+        }
+
+        var deltaOut = bytesOut - prev.Out; // Bytes sent since last sample
+        var deltaIn = bytesIn - prev.In; // Bytes received since last sample
         _last[key] = (bytesOut, bytesIn); // Remember counters for next poll
 
         if (deltaOut == 0 && deltaIn == 0) // No new data on this connection
@@ -114,14 +121,6 @@ internal sealed class TrafficCollector
             host,
             (long)deltaOut,
             (long)deltaIn));
-    }
-
-    // Computes growth since last sample, treating counter reset as a fresh total
-    private static ulong Delta(ulong current, ulong previous)
-    {
-        if (current >= previous) // Normal monotonic counter
-            return current - previous;
-        return current; // Counter wrapped or connection reset
     }
 
     // True when the remote side is not a real peer (listen or zero address)

@@ -6,17 +6,6 @@ using NetworkMonitor.Storage;
 
 namespace NetworkMonitor;
 
-internal readonly record struct RtUsageRow(
-  string AppName,
-  long CurrentDownBytes,
-  long CurrentUpBytes,
-  long DailyDownBytes,
-  long DailyUpBytes,
-  long WeeklyDownBytes,
-  long WeeklyUpBytes,
-  long MonthlyDownBytes,
-  long MonthlyUpBytes);
-
 internal static class Program
 {
   private static string DefaultDbPath => NetmConfig.Load().ResolvedDatabasePath;
@@ -81,11 +70,11 @@ internal static class Program
     var status = new Command("status", "Show collector status");
     status.SetHandler(() => DaemonManager.Status());
 
-    var reset = new Command("reset", "Delete all sampling data from the database")
+    var reset = new Command("reset", "Remove the traffic database and restart the collector (clears in-memory counters)")
     {
       dbOption,
     };
-    reset.SetHandler(RunReset, dbOption);
+    reset.SetHandler(dbPath => RunReset(dbPath), dbOption);
 
     var root = new RootCommand("Windows TCP usage monitor (netm)")
     {
@@ -201,7 +190,7 @@ internal static class Program
     }
 #else
     await Task.CompletedTask;
-    Console.Error.WriteLine("Traffic collection requires Windows (net10.0-windows build).");
+    ConsoleUi.WriteError("Traffic collection requires Windows (net9.0-windows build).");
     return 1;
 #endif
   }
@@ -257,35 +246,35 @@ internal static class Program
     var exePath = Environment.ProcessPath;
     if (string.IsNullOrWhiteSpace(exePath))
     {
-      Console.Error.WriteLine("Could not resolve the current executable path.");
+      ConsoleUi.WriteError("Could not resolve the current executable path.");
       Environment.Exit(1);
       return;
     }
 
     dbPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(dbPath));
     var code = WindowsServiceManager.Install(exePath, intervalSeconds, dbPath, out var message);
-    Console.WriteLine(message);
+    ConsoleUi.WriteServiceResult(code, message);
     Environment.Exit(code);
   }
 
   private static void RunServiceUninstall()
   {
     var code = WindowsServiceManager.Uninstall(out var message);
-    Console.WriteLine(message);
+    ConsoleUi.WriteServiceResult(code, message);
     Environment.Exit(code);
   }
 
   private static void RunServiceStart()
   {
     var code = WindowsServiceManager.Start(out var message);
-    Console.WriteLine(message);
+    ConsoleUi.WriteServiceResult(code, message);
     Environment.Exit(code);
   }
 
   private static void RunServiceStop()
   {
     var code = WindowsServiceManager.Stop(out var message);
-    Console.WriteLine(message);
+    ConsoleUi.WriteServiceResult(code, message);
     Environment.Exit(code);
   }
 
@@ -293,26 +282,86 @@ internal static class Program
   {
     if (!WindowsServiceManager.IsInstalled())
     {
-      Console.WriteLine($"Service '{WindowsServiceManager.ServiceName}' is not installed.");
-      Console.WriteLine("Install with: netm service install");
+      ConsoleUi.RenderServiceStatus(
+        installed: false,
+        WindowsServiceManager.ServiceName,
+        null,
+        null);
       return;
     }
 
     var status = WindowsServiceManager.GetStatus();
-    Console.WriteLine($"Service: {WindowsServiceManager.ServiceName}");
-    Console.WriteLine($"Display: {WindowsServiceManager.DisplayName}");
-    Console.WriteLine($"Status:  {status}");
-    Console.WriteLine("Start:   netm service start");
-    Console.WriteLine("Stop:    netm service stop");
+    ConsoleUi.RenderServiceStatus(
+      installed: true,
+      WindowsServiceManager.ServiceName,
+      WindowsServiceManager.DisplayName,
+      status.ToString());
   }
 #endif
 
-  private static void RunReset(string dbPath)
+  private static int RunReset(string dbPath)
   {
-    using var store = new TrafficStore(dbPath);
-    var deleted = store.ClearAllUsage();
-    store.Vacuum();
-    Console.WriteLine($"Deleted {deleted:N0} sampling rows from {Path.GetFullPath(dbPath)}.");
+    dbPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(dbPath));
+
+#if WINDOWS
+    var restartService = WindowsServiceManager.IsInstalled() && WindowsServiceManager.IsRunning();
+    var restartDaemon = !restartService && DaemonManager.IsCollectorRunning();
+
+    if (restartService)
+    {
+      var stopCode = WindowsServiceManager.Stop(out var stopMessage);
+      if (stopCode != 0)
+      {
+        ConsoleUi.WriteError(stopMessage);
+        return stopCode;
+      }
+
+      ConsoleUi.WriteNote("NetM service stopped for reset.");
+    }
+    else if (restartDaemon)
+    {
+      var stopCode = DaemonManager.Stop();
+      if (stopCode != 0)
+        return stopCode;
+    }
+#else
+    const bool restartService = false;
+    const bool restartDaemon = false;
+#endif
+
+    var removed = TrafficDatabase.DeleteFiles(dbPath);
+    if (removed)
+      ConsoleUi.WriteSuccess($"Removed database at {dbPath}.");
+    else
+      ConsoleUi.WriteNote($"No database file at {dbPath} (already empty).");
+
+#if WINDOWS
+    if (restartService)
+    {
+      var startCode = WindowsServiceManager.Start(out var startMessage);
+      if (startCode != 0)
+      {
+        ConsoleUi.WriteError(startMessage);
+        return startCode;
+      }
+
+      ConsoleUi.WriteSuccess("NetM service restarted with a fresh database and in-memory counters.");
+      return 0;
+    }
+
+    if (restartDaemon)
+    {
+      var startCode = DaemonManager.Start();
+      if (startCode != 0)
+        return startCode;
+
+      ConsoleUi.WriteSuccess("Collector restarted with a fresh database and in-memory counters.");
+      return 0;
+    }
+#endif
+
+    ConsoleUi.WriteNote("Collector was not running; start it with netm start or netm service start when ready.");
+    return 0;
   }
 
   private static void RunInfo(string dbPath)
@@ -326,25 +375,14 @@ internal static class Program
       Native.IpHelperApi.PrintStatsDiagnostics();
 #endif
 
-    Console.WriteLine($"Version:    {version}");
-    Console.WriteLine($"Database:   {Path.GetFullPath(info.DatabasePath)}");
-    Console.WriteLine($"File size:  {FormatBytes(info.FileBytes)}");
-    Console.WriteLine($"Rows:       {info.RowCount:N0}");
-    Console.WriteLine($"Apps:       {info.DistinctAppCount:N0}");
-    Console.WriteLine($"First UTC:  {info.FirstMinuteUtc ?? "(none)"}");
-    Console.WriteLine($"Last UTC:   {info.LastMinuteUtc ?? "(none)"}");
-    Console.WriteLine($"Datetime:   local {CompactDateTime.Format} (date-only yyMMdd → T0000)");
+    ConsoleUi.RenderInfo(version, info, CompactDateTime.Format);
   }
 
   private static void RunAppsList(string? filter, string dbPath)
   {
     using var store = new TrafficStore(dbPath);
     var apps = store.ListAppNames(filter);
-    if (filter is not null)
-      Console.WriteLine($"Filter: {filter}");
-    foreach (var app in apps)
-      Console.WriteLine(app);
-    Console.WriteLine($"Count: {apps.Count}");
+    ConsoleUi.RenderAppsList(apps, filter);
   }
 
   private static void RunUsage(
@@ -359,25 +397,36 @@ internal static class Program
     var (fromUtc, toUtc) = CompactDateTime.ResolveRangeUtc(fromRaw, toRaw);
 
     using var store = new TrafficStore(dbPath);
-    PrintRangeHeader(fromUtc, toUtc, target, includePrivate);
+    var targetLabel = DescribeTarget(target);
+    ConsoleUi.RenderUsageContext(fromUtc, toUtc, targetLabel, includePrivate);
 
     switch (target.Kind)
     {
       case UsageTargetKind.Apps:
-        PrintAppRows(store.UsageByAppInRangeUtc(fromUtc, toUtc, includePrivate));
+        ConsoleUi.RenderAppUsageTable(store.UsageByAppInRangeUtc(fromUtc, toUtc, includePrivate));
         break;
       case UsageTargetKind.IpTop100:
-        PrintIpRows(store.UsageByIpInRangeUtc(fromUtc, toUtc, includePrivate, QueryFilters.TopUsageLimit));
+        ConsoleUi.RenderIpUsageTable(store.UsageByIpInRangeUtc(fromUtc, toUtc, includePrivate, QueryFilters.TopUsageLimit));
         break;
       case UsageTargetKind.HostTop100:
-        PrintHostRows(store.UsageByHostInRangeUtc(fromUtc, toUtc, includePrivate, QueryFilters.TopUsageLimit));
+        ConsoleUi.RenderHostUsageTable(store.UsageByHostInRangeUtc(fromUtc, toUtc, includePrivate, QueryFilters.TopUsageLimit));
         break;
       default:
         var totals = store.UsageTotalsInRangeUtc(fromUtc, toUtc, target, includePrivate);
-        PrintTotals(totals);
+        ConsoleUi.RenderUsageTotals(totals.BytesSent, totals.BytesReceived);
         break;
     }
   }
+
+  private static string DescribeTarget(UsageTarget target) =>
+    target.Kind switch
+    {
+      UsageTargetKind.All => "all apps",
+      UsageTargetKind.Apps => "apps",
+      UsageTargetKind.IpTop100 => "ip (top 100)",
+      UsageTargetKind.HostTop100 => "host (top 100)",
+      _ => target.Value ?? "",
+    };
 
   private static void RunRealtime(string dbPath)
   {
@@ -386,12 +435,14 @@ internal static class Program
     var weeklyStartLocal = StartOfCurrentWeekSaturday(nowLocal);
     var monthlyStartLocal = new DateTime(nowLocal.Year, nowLocal.Month, 1, 0, 0, 0, DateTimeKind.Local);
 
-    var nowUtc = TrafficStore.FormatBucketUtc(nowLocal.ToUniversalTime());
+    var config = NetmConfig.Load();
+    var bucketSeconds = config.SamplingIntervalSeconds;
+    var nowUtc = TrafficStore.FormatBucketUtc(nowLocal.ToUniversalTime(), bucketSeconds);
     var dailyUtc = dailyStartLocal.ToUniversalTime().ToString("O");
     var weeklyUtc = weeklyStartLocal.ToUniversalTime().ToString("O");
     var monthlyUtc = monthlyStartLocal.ToUniversalTime().ToString("O");
 
-    using var store = new TrafficStore(dbPath);
+    using var store = new TrafficStore(dbPath, bucketSeconds);
     var currentRows = store.UsageByAppInRangeUtc(nowUtc, nowUtc, includePrivate: true)
       .ToDictionary(x => NormalizeAppName(x.AppName), x => x, StringComparer.OrdinalIgnoreCase);
     var dailyRows = store.UsageByAppInRangeUtc(dailyUtc, nowUtc, includePrivate: true)
@@ -409,7 +460,7 @@ internal static class Program
       .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
       .ToList();
 
-    var rows = new List<RtUsageRow>();
+    var rows = new List<ConsoleUi.RealtimeUsageRow>();
     foreach (var app in apps)
     {
       currentRows.TryGetValue(app, out var current);
@@ -417,7 +468,7 @@ internal static class Program
       weeklyRows.TryGetValue(app, out var weekly);
       monthlyRows.TryGetValue(app, out var monthly);
 
-      rows.Add(new RtUsageRow(
+      rows.Add(new ConsoleUi.RealtimeUsageRow(
         app,
         current.BytesReceived,
         current.BytesSent,
@@ -429,10 +480,7 @@ internal static class Program
         monthly.BytesSent));
     }
 
-    Console.WriteLine($"Daily:   {dailyStartLocal:yyyy-MM-dd HH:mm:ss} local -> {nowLocal:yyyy-MM-dd HH:mm:ss} local");
-    Console.WriteLine($"Weekly:  {weeklyStartLocal:yyyy-MM-dd HH:mm:ss} local -> {nowLocal:yyyy-MM-dd HH:mm:ss} local");
-    Console.WriteLine($"Monthly: {monthlyStartLocal:yyyy-MM-dd HH:mm:ss} local -> {nowLocal:yyyy-MM-dd HH:mm:ss} local");
-    PrintRealtimeRows(rows);
+    ConsoleUi.RenderRealtime(dailyStartLocal, weeklyStartLocal, monthlyStartLocal, nowLocal, rows);
   }
 
   private static bool ParseIncludePrivate(string raw)
@@ -442,69 +490,9 @@ internal static class Program
     if (raw.Equals("no", StringComparison.OrdinalIgnoreCase) || raw.Equals("false", StringComparison.OrdinalIgnoreCase) || raw == "0")
       return false;
 
-    Console.Error.WriteLine($"Invalid --include-private '{raw}'. Use yes or no.");
+    ConsoleUi.WriteError($"Invalid --include-private '{raw}'. Use yes or no.");
     Environment.Exit(1);
     return false;
-  }
-
-  private static void PrintRangeHeader(string fromUtc, string toUtc, UsageTarget target, bool includePrivate)
-  {
-    var targetLabel = target.Kind switch
-    {
-      UsageTargetKind.All => "all apps",
-      UsageTargetKind.Apps => "apps",
-      UsageTargetKind.IpTop100 => "ip (top 100)",
-      UsageTargetKind.HostTop100 => "host (top 100)",
-      _ => target.Value ?? "",
-    };
-    Console.WriteLine($"Range (UTC): {fromUtc} .. {toUtc} (inclusive)");
-    Console.WriteLine($"Target:      {targetLabel}");
-    Console.WriteLine($"Private IPs: {(includePrivate ? "included" : "excluded")}");
-  }
-
-  private static void PrintTotals(UsageTotalsRow row)
-  {
-    Console.WriteLine($"Upload (sent):   {FormatBytes(row.BytesSent)}");
-    Console.WriteLine($"Download (recv): {FormatBytes(row.BytesReceived)}");
-    Console.WriteLine($"Total:           {FormatBytes(row.BytesSent + row.BytesReceived)}");
-  }
-
-  private static void PrintAppRows(IReadOnlyList<AppUsageRow> rows)
-  {
-    Console.WriteLine($"{"Application",-32} {"Upload",12} {"Download",12} {"Total",12}");
-    foreach (var r in rows)
-      Console.WriteLine($"{r.AppName,-32} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
-  }
-
-  private static void PrintIpRows(IReadOnlyList<IpUsageRow> rows)
-  {
-    Console.WriteLine($"{"Remote IP",-40} {"Upload",12} {"Download",12} {"Total",12}");
-    foreach (var r in rows)
-      Console.WriteLine($"{r.RemoteIp,-40} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
-  }
-
-  private static void PrintHostRows(IReadOnlyList<HostUsageRow> rows)
-  {
-    Console.WriteLine($"{"Host",-48} {"Upload",12} {"Download",12} {"Total",12}");
-    foreach (var r in rows)
-      Console.WriteLine($"{r.HostName,-48} {FormatBytes(r.BytesSent),12} {FormatBytes(r.BytesReceived),12} {FormatBytes(r.BytesSent + r.BytesReceived),12}");
-  }
-
-  private static string FormatBytes(long value)
-  {
-    if (value < 0)
-      value = 0;
-
-    const double k = 1024d;
-    if (value < k)
-      return $"{value} B";
-    if (value < k * k)
-      return $"{value / k:0.##} KB";
-    if (value < k * k * k)
-      return $"{value / (k * k):0.##} MB";
-    if (value < k * k * k * k)
-      return $"{value / (k * k * k):0.##} GB";
-    return $"{value / (k * k * k * k):0.##} TB";
   }
 
   private static DateTime StartOfCurrentWeekSaturday(DateTime localNow)
@@ -522,24 +510,4 @@ internal static class Program
     return dot > 0 ? name[..dot] : name;
   }
 
-  private static void PrintRealtimeRows(IReadOnlyList<RtUsageRow> rows)
-  {
-    const string red = "\u001b[31m";
-    const string green = "\u001b[32m";
-    const string reset = "\u001b[0m";
-
-    Console.WriteLine();
-    Console.WriteLine($"{"App",-24} {"Download",10} {"Upload",10} {"Daily",22} {"Weekly",22} {"Monthly",22}");
-    foreach (var row in rows)
-    {
-      var daily = $"{green}{FormatGb(row.DailyDownBytes)}{reset}/{red}{FormatGb(row.DailyUpBytes)}{reset}";
-      var weekly = $"{green}{FormatGb(row.WeeklyDownBytes)}{reset}/{red}{FormatGb(row.WeeklyUpBytes)}{reset}";
-      var monthly = $"{green}{FormatGb(row.MonthlyDownBytes)}{reset}/{red}{FormatGb(row.MonthlyUpBytes)}{reset}";
-      Console.WriteLine($"{row.AppName,-24} {FormatMb(row.CurrentDownBytes),10} {FormatMb(row.CurrentUpBytes),10} {daily,22} {weekly,22} {monthly,22}");
-    }
-  }
-
-  private static string FormatMb(long bytes) => $"{bytes / (1024d * 1024d):0.##}";
-
-  private static string FormatGb(long bytes) => $"{bytes / (1024d * 1024d * 1024d):0.##}";
 }

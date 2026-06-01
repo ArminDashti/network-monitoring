@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using NetworkMonitor.Cli;
 using NetworkMonitor.Storage;
 
 namespace NetworkMonitor.Services;
@@ -14,14 +15,14 @@ internal static class DaemonManager
     public static int Start()
     {
 #if !WINDOWS
-        Console.Error.WriteLine("Background collection requires a Windows build (net10.0-windows).");
+        ConsoleUi.WriteError("Background collection requires a Windows build (net9.0-windows).");
         return 1;
 #else
         Directory.CreateDirectory(NetmPaths.Home);
 
         if (TryReadState(out var existing) && IsProcessRunning(existing.ProcessId))
         {
-            Console.Error.WriteLine($"Collector already running (PID {existing.ProcessId}).");
+            ConsoleUi.WriteError($"Collector already running (PID {existing.ProcessId}).");
             return 1;
         }
 
@@ -30,7 +31,7 @@ internal static class DaemonManager
         var exe = Environment.ProcessPath;
         if (string.IsNullOrEmpty(exe) || !File.Exists(exe))
         {
-            Console.Error.WriteLine("Could not resolve netm executable path.");
+            ConsoleUi.WriteError("Could not resolve netm executable path.");
             return 1;
         }
 
@@ -50,30 +51,30 @@ internal static class DaemonManager
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Failed to start collector: {ex.Message}");
+            ConsoleUi.WriteError($"Failed to start collector: {ex.Message}");
             return 1;
         }
 
         if (child is null)
         {
-            Console.Error.WriteLine("Failed to start collector process.");
+            ConsoleUi.WriteError("Failed to start collector process.");
             return 1;
         }
 
         if (!WaitForState(TimeSpan.FromSeconds(10)))
         {
-            Console.Error.WriteLine("Collector process started but did not report ready in time.");
+            ConsoleUi.WriteError("Collector process started but did not report ready in time.");
             return 1;
         }
 
         if (!TryReadState(out var state))
         {
-            Console.Error.WriteLine("Collector started but state file is missing.");
+            ConsoleUi.WriteError("Collector started but state file is missing.");
             return 1;
         }
 
-        Console.WriteLine($"Collector started (PID {state.ProcessId}).");
-        Console.WriteLine($"Database: {state.DatabasePath}");
+        ConsoleUi.WriteSuccess($"Collector started (PID {state.ProcessId}).");
+        ConsoleUi.WriteNote($"Database: {state.DatabasePath}");
         return 0;
 #endif
     }
@@ -82,14 +83,14 @@ internal static class DaemonManager
     {
         if (!TryReadState(out var state))
         {
-            Console.WriteLine("Collector is not running.");
+            ConsoleUi.WriteNote("Collector is not running.");
             CleanupStalePidFile();
             return 0;
         }
 
         if (!IsProcessRunning(state.ProcessId))
         {
-            Console.WriteLine("Collector is not running (stale PID file removed).");
+            ConsoleUi.WriteWarning("Collector is not running (stale PID file removed).");
             CleanupStalePidFile();
             return 0;
         }
@@ -103,56 +104,78 @@ internal static class DaemonManager
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine($"Failed to stop collector (PID {state.ProcessId}): {ex.Message}");
+            ConsoleUi.WriteError($"Failed to stop collector (PID {state.ProcessId}): {ex.Message}");
             return 1;
         }
 
         CleanupStalePidFile();
-        Console.WriteLine($"Collector stopped (PID {state.ProcessId}).");
+        ConsoleUi.WriteSuccess($"Collector stopped (PID {state.ProcessId}).");
         return 0;
     }
 
     public static int Status()
     {
         var config = NetmConfig.Load();
-        Console.WriteLine($"Home:     {NetmPaths.Home}");
-        Console.WriteLine($"Config:   {NetmPaths.ConfigFile}");
-        Console.WriteLine($"Database: {config.ResolvedDatabasePath}");
 
         if (!TryReadState(out var state))
         {
-            Console.WriteLine("Status:   stopped");
+            ConsoleUi.RenderDaemonStatus(
+                NetmPaths.Home,
+                NetmPaths.ConfigFile,
+                config.ResolvedDatabasePath,
+                isRunning: false,
+                isStale: false,
+                null, null, null, null, null, null, null);
             return 0;
         }
 
         if (!IsProcessRunning(state.ProcessId))
         {
-            Console.WriteLine($"Status:   stopped (stale PID {state.ProcessId})");
+            ConsoleUi.RenderDaemonStatus(
+                NetmPaths.Home,
+                NetmPaths.ConfigFile,
+                config.ResolvedDatabasePath,
+                isRunning: false,
+                isStale: true,
+                state.ProcessId,
+                null, null, null, null, null, null);
             CleanupStalePidFile();
             return 0;
         }
 
         var uptime = DateTime.UtcNow - state.StartedUtc;
-        Console.WriteLine($"Status:   running");
-        Console.WriteLine($"PID:      {state.ProcessId}");
-        Console.WriteLine($"Started:  {state.StartedUtc:O} UTC");
-        Console.WriteLine($"Uptime:   {FormatUptime(uptime)}");
-        Console.WriteLine($"Interval: {config.SamplingIntervalSeconds}s");
+        long? rowCount = null;
+        string? lastMinuteUtc = null;
+        string? databaseError = null;
 
         if (File.Exists(config.ResolvedDatabasePath))
         {
             try
             {
-                using var store = new TrafficStore(config.ResolvedDatabasePath);
+                using var store = new TrafficStore(config.ResolvedDatabasePath, config.SamplingIntervalSeconds);
                 var info = store.GetDatabaseInfo(config.ResolvedDatabasePath);
-                Console.WriteLine($"Rows:     {info.RowCount:N0}");
-                Console.WriteLine($"Last UTC: {info.LastMinuteUtc ?? "(none)"}");
+                rowCount = info.RowCount;
+                lastMinuteUtc = info.LastMinuteUtc;
             }
             catch (Exception ex)
             {
-                Console.WriteLine($"Database: unavailable ({ex.Message})");
+                databaseError = ex.Message;
             }
         }
+
+        ConsoleUi.RenderDaemonStatus(
+            NetmPaths.Home,
+            NetmPaths.ConfigFile,
+            config.ResolvedDatabasePath,
+            isRunning: true,
+            isStale: false,
+            state.ProcessId,
+            state.StartedUtc,
+            uptime,
+            config.SamplingIntervalSeconds,
+            rowCount,
+            lastMinuteUtc,
+            databaseError);
 
         return 0;
     }
@@ -240,14 +263,5 @@ internal static class DaemonManager
         {
             return false;
         }
-    }
-
-    private static string FormatUptime(TimeSpan uptime)
-    {
-        if (uptime.TotalDays >= 1)
-            return $"{(int)uptime.TotalDays}d {uptime.Hours}h {uptime.Minutes}m";
-        if (uptime.TotalHours >= 1)
-            return $"{uptime.Hours}h {uptime.Minutes}m {uptime.Seconds}s";
-        return $"{uptime.Minutes}m {uptime.Seconds}s";
     }
 }

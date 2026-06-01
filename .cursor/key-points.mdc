@@ -26,7 +26,9 @@
 ## SQL
 - Avoid `$"""` interpolated raw strings for SQL fragments containing `$parameter` names — use `StringBuilder` or non-interpolated strings.
 - Private IP filtering uses `LIKE` patterns in `QueryFilters.PrivateIpExcludeClause`.
-- Storage buckets are **1 second** (`TrafficStore.BucketIntervalSeconds`); column is still `minute_utc` for schema compatibility. Keys use `yyyy-MM-ddTHH:mm:ssZ`.
+- Storage buckets match `monitoring.sampling_interval` (default **5s**), end-aligned (`00:00:05`, `00:00:10`, …). Each row holds only that window’s delta, not a running total. Column is still `minute_utc` for schema compatibility. Keys use `yyyy-MM-ddTHH:mm:ssZ`.
+- First sight of a TCP connection records a baseline only (no bytes written until the next sample).
+- Per-socket tracking key includes local port; IPv4 skips rows without eStats (same as IPv6) and only counts ESTABLISHED sockets.
 
 ## Legacy daemon CLI
 - `netm start` spawns hidden `netm collect` in `%NETM_HOME%` and writes `%NETM_HOME%\netm.pid`.

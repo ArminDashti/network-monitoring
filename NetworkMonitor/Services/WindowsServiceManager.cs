@@ -32,6 +32,12 @@ internal static class WindowsServiceManager
         return controller.Status;
     }
 
+    public static bool IsRunning()
+    {
+        var status = GetStatus();
+        return status is ServiceControllerStatus.Running or ServiceControllerStatus.StartPending;
+    }
+
     public static int Install(string executablePath, int intervalSeconds, string dbPath, out string message)
     {
         if (!OperatingSystem.IsWindows())

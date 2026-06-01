@@ -5,12 +5,15 @@ namespace NetworkMonitor.Storage;
 
 internal sealed class TrafficStore : IDisposable
 {
-    private const int BucketIntervalSeconds = 1;
-
     private readonly SqliteConnection _connection;
+    private readonly int _bucketIntervalSeconds;
 
-    public TrafficStore(string databasePath)
+    public TrafficStore(string databasePath, int bucketIntervalSeconds = 5)
     {
+        if (bucketIntervalSeconds < 1)
+            throw new ArgumentOutOfRangeException(nameof(bucketIntervalSeconds), "Bucket interval must be at least 1 second.");
+
+        _bucketIntervalSeconds = bucketIntervalSeconds;
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(databasePath)) ?? ".");
         var cs = new SqliteConnectionStringBuilder
         {
@@ -58,7 +61,7 @@ internal sealed class TrafficStore : IDisposable
             return;
 
         var now = DateTime.UtcNow;
-        var minuteUtc = FormatBucketUtc(now);
+        var minuteUtc = FormatBucketUtc(now, _bucketIntervalSeconds);
         
         using var tx = _connection.BeginTransaction();
         foreach (var d in deltas)
@@ -69,8 +72,8 @@ internal sealed class TrafficStore : IDisposable
                 INSERT INTO usage (minute_utc, app_name, nic_name, remote_ip, remote_port, host_name, bytes_sent, bytes_received)
                 VALUES ($min, $app, $nic, $rip, $rport, $host, $up, $down)
                 ON CONFLICT(minute_utc, app_name, nic_name, remote_ip, remote_port) DO UPDATE SET
-                  bytes_sent = bytes_sent + excluded.bytes_sent,
-                  bytes_received = bytes_received + excluded.bytes_received,
+                  bytes_sent = usage.bytes_sent + excluded.bytes_sent,
+                  bytes_received = usage.bytes_received + excluded.bytes_received,
                   host_name = excluded.host_name;
                 """;
             cmd.Parameters.AddWithValue("$min", minuteUtc);
@@ -288,18 +291,26 @@ internal sealed class TrafficStore : IDisposable
         return new DatabaseInfoRow(databasePath, rowCount, firstMinute, lastMinute, appCount, fileBytes);
     }
 
-    private static DateTime TruncateUtcToBucket(DateTime utcNow)
+    /// <summary>
+    /// End-aligned bucket label for the interval containing <paramref name="utcNow"/>.
+    /// Example (5s): traffic sampled at 00:00:03–00:00:07 is stored under 00:00:05 or 00:00:10.
+    /// </summary>
+    internal static string FormatBucketUtc(DateTime utcNow, int bucketIntervalSeconds)
+    {
+        var end = AlignBucketEndUtc(utcNow, bucketIntervalSeconds);
+        return end.ToString("yyyy-MM-ddTHH:mm:ssZ");
+    }
+
+    internal static DateTime AlignBucketEndUtc(DateTime utcNow, int bucketIntervalSeconds)
     {
         var utc = utcNow.Kind == DateTimeKind.Utc
             ? utcNow
             : utcNow.ToUniversalTime();
 
-        var second = utc.Second / BucketIntervalSeconds * BucketIntervalSeconds;
-        return new DateTime(utc.Year, utc.Month, utc.Day, utc.Hour, utc.Minute, second, DateTimeKind.Utc);
+        var epochSeconds = (long)(utc - DateTime.UnixEpoch).TotalSeconds;
+        var bucketEndSeconds = ((epochSeconds + bucketIntervalSeconds - 1) / bucketIntervalSeconds) * bucketIntervalSeconds;
+        return DateTime.UnixEpoch.AddSeconds(bucketEndSeconds);
     }
-
-    internal static string FormatBucketUtc(DateTime utcNow) =>
-        TruncateUtcToBucket(utcNow).ToString("yyyy-MM-ddTHH:mm:ssZ");
 
     private static string BuildRangeSql(
         string selectAndWhere,
