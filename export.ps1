@@ -7,7 +7,7 @@ param(
     [switch]$AddToPath,
     [switch]$SetEnvVars,
     [switch]$SkipService,
-    [int]$ServiceInterval = 5
+    [int]$ServiceInterval = 1
 )
 
 $ErrorActionPreference = "Stop"
@@ -363,7 +363,7 @@ database_path = "%NETM_HOME%\\traffic.db"
 # Enable/disable monitoring
 enabled = true
 # Sampling interval in seconds
-sampling_interval = 5
+sampling_interval = 1
 
 # Storage settings
 [storage]

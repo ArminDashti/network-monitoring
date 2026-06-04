@@ -66,7 +66,7 @@ internal static class SettingsManager
 
             [monitoring]
             enabled = true
-            sampling_interval = 5
+            sampling_interval = 1
 
             [storage]
             max_size_mb = 500

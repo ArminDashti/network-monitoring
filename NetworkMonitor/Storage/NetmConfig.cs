@@ -7,7 +7,7 @@ internal sealed class NetmConfig
 {
     public string DatabasePath { get; init; } = "";
     public bool MonitoringEnabled { get; init; } = true;
-    public int SamplingIntervalSeconds { get; init; } = 5;
+    public int SamplingIntervalSeconds { get; init; } = 1;
     public int MaxSizeMb { get; init; } = 500;
     public int RetentionDays { get; init; } = 30;
     public string LogLevel { get; init; } = "Info";
@@ -42,7 +42,7 @@ internal sealed class NetmConfig
         {
             DatabasePath = Path.Combine(NetmPaths.Home, "traffic.db"),
             MonitoringEnabled = true,
-            SamplingIntervalSeconds = 5,
+            SamplingIntervalSeconds = 1,
             MaxSizeMb = 500,
             RetentionDays = 30,
             LogLevel = "Info",

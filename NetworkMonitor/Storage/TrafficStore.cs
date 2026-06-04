@@ -5,15 +5,12 @@ namespace NetworkMonitor.Storage;
 
 internal sealed class TrafficStore : IDisposable
 {
+    internal const int BucketIntervalSeconds = 1;
+
     private readonly SqliteConnection _connection;
-    private readonly int _bucketIntervalSeconds;
 
-    public TrafficStore(string databasePath, int bucketIntervalSeconds = 5)
+    public TrafficStore(string databasePath)
     {
-        if (bucketIntervalSeconds < 1)
-            throw new ArgumentOutOfRangeException(nameof(bucketIntervalSeconds), "Bucket interval must be at least 1 second.");
-
-        _bucketIntervalSeconds = bucketIntervalSeconds;
         Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(databasePath)) ?? ".");
         var cs = new SqliteConnectionStringBuilder
         {
@@ -61,7 +58,7 @@ internal sealed class TrafficStore : IDisposable
             return;
 
         var now = DateTime.UtcNow;
-        var minuteUtc = FormatBucketUtc(now, _bucketIntervalSeconds);
+        var minuteUtc = FormatBucketUtc(now);
         
         using var tx = _connection.BeginTransaction();
         foreach (var d in deltas)
@@ -292,14 +289,10 @@ internal sealed class TrafficStore : IDisposable
     }
 
     /// <summary>
-    /// End-aligned bucket label for the interval containing <paramref name="utcNow"/>.
-    /// Example (5s): traffic sampled at 00:00:03–00:00:07 is stored under 00:00:05 or 00:00:10.
+    /// End-aligned bucket label for the 1-second interval containing <paramref name="utcNow"/>.
     /// </summary>
-    internal static string FormatBucketUtc(DateTime utcNow, int bucketIntervalSeconds)
-    {
-        var end = AlignBucketEndUtc(utcNow, bucketIntervalSeconds);
-        return end.ToString("yyyy-MM-ddTHH:mm:ssZ");
-    }
+    internal static string FormatBucketUtc(DateTime utcNow) =>
+        AlignBucketEndUtc(utcNow, BucketIntervalSeconds).ToString("yyyy-MM-ddTHH:mm:ssZ");
 
     internal static DateTime AlignBucketEndUtc(DateTime utcNow, int bucketIntervalSeconds)
     {

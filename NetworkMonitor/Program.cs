@@ -435,14 +435,12 @@ internal static class Program
     var weeklyStartLocal = StartOfCurrentWeekSaturday(nowLocal);
     var monthlyStartLocal = new DateTime(nowLocal.Year, nowLocal.Month, 1, 0, 0, 0, DateTimeKind.Local);
 
-    var config = NetmConfig.Load();
-    var bucketSeconds = config.SamplingIntervalSeconds;
-    var nowUtc = TrafficStore.FormatBucketUtc(nowLocal.ToUniversalTime(), bucketSeconds);
+    var nowUtc = TrafficStore.FormatBucketUtc(nowLocal.ToUniversalTime());
     var dailyUtc = dailyStartLocal.ToUniversalTime().ToString("O");
     var weeklyUtc = weeklyStartLocal.ToUniversalTime().ToString("O");
     var monthlyUtc = monthlyStartLocal.ToUniversalTime().ToString("O");
 
-    using var store = new TrafficStore(dbPath, bucketSeconds);
+    using var store = new TrafficStore(dbPath);
     var currentRows = store.UsageByAppInRangeUtc(nowUtc, nowUtc, includePrivate: true)
       .ToDictionary(x => NormalizeAppName(x.AppName), x => x, StringComparer.OrdinalIgnoreCase);
     var dailyRows = store.UsageByAppInRangeUtc(dailyUtc, nowUtc, includePrivate: true)

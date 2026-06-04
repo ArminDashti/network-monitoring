@@ -96,7 +96,7 @@ Configuration lives in `%LocalAppData%\NetM\configs.toml` (or `%NETM_HOME%\confi
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `monitoring.sampling_interval` | `5` | Seconds between TCP samples |
+| `monitoring.sampling_interval` | `1` | Seconds between TCP samples |
 | `storage.retention_days` | `30` | Delete usage rows older than this |
 | `storage.max_size_mb` | `500` | Prune when the database file exceeds this size |
 

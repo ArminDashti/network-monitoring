@@ -152,7 +152,7 @@ internal static class DaemonManager
         {
             try
             {
-                using var store = new TrafficStore(config.ResolvedDatabasePath, config.SamplingIntervalSeconds);
+                using var store = new TrafficStore(config.ResolvedDatabasePath);
                 var info = store.GetDatabaseInfo(config.ResolvedDatabasePath);
                 rowCount = info.RowCount;
                 lastMinuteUtc = info.LastMinuteUtc;
