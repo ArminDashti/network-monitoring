@@ -37,13 +37,11 @@ internal static class ServiceHostRunner
             return 1;
         }
 
+        var config = NetmConfig.Load().WithCollectionSettings(dbPath, intervalSeconds);
+
         var host = Host.CreateApplicationBuilder(args);
         host.Services.AddWindowsService(options => options.ServiceName = WindowsServiceManager.ServiceName);
-        host.Services.Configure<CollectorOptions>(options =>
-        {
-            options.DatabasePath = dbPath;
-            options.IntervalSeconds = intervalSeconds;
-        });
+        host.Services.AddSingleton(config);
         host.Services.AddHostedService<CollectorHostedService>();
 
         if (OperatingSystem.IsWindows())

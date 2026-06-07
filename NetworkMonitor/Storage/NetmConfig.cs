@@ -36,6 +36,18 @@ internal sealed class NetmConfig
         }
     }
 
+    public NetmConfig WithCollectionSettings(string databasePath, int samplingIntervalSeconds) =>
+        new()
+        {
+            DatabasePath = databasePath,
+            SamplingIntervalSeconds = Math.Max(1, samplingIntervalSeconds),
+            MonitoringEnabled = MonitoringEnabled,
+            MaxSizeMb = MaxSizeMb,
+            RetentionDays = RetentionDays,
+            LogLevel = LogLevel,
+            LogFile = LogFile,
+        };
+
     private static NetmConfig CreateDefaults()
     {
         return new NetmConfig
