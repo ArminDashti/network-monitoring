@@ -1,0 +1,231 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'">
+  <title>NetM</title>
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="titlebar" id="titlebar">
+      <div class="titlebar-drag">
+        <div class="titlebar-brand">
+          <svg class="brand-icon" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M4 12h16M4 6h10M4 18h14" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+            <circle cx="18" cy="12" r="3" stroke="currentColor" stroke-width="2"/>
+          </svg>
+          <span class="brand-name">NetM</span>
+        </div>
+      </div>
+      <div class="titlebar-controls">
+        <button class="titlebar-btn" id="btn-minimize" title="Minimize" aria-label="Minimize">
+          <svg viewBox="0 0 12 12"><rect y="5" width="12" height="1.5" fill="currentColor"/></svg>
+        </button>
+        <button class="titlebar-btn" id="btn-maximize" title="Maximize" aria-label="Maximize">
+          <svg viewBox="0 0 12 12"><rect x="1" y="1" width="10" height="10" stroke="currentColor" stroke-width="1.5" fill="none"/></svg>
+        </button>
+        <button class="titlebar-btn titlebar-btn-close" id="btn-close" title="Close" aria-label="Close">
+          <svg viewBox="0 0 12 12"><path d="M1 1l10 10M11 1L1 11" stroke="currentColor" stroke-width="1.5"/></svg>
+        </button>
+      </div>
+    </header>
+
+    <div class="app-body">
+      <nav class="sidebar" aria-label="Main navigation">
+        <button class="nav-item active" data-view="live">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+          <span>Live</span>
+        </button>
+        <button class="nav-item" data-view="usage">
+          <svg viewBox="0 0 24 24" fill="none"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          <span>Usage</span>
+        </button>
+        <button class="nav-item" data-view="apps">
+          <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/></svg>
+          <span>Apps</span>
+        </button>
+        <button class="nav-item" data-view="service">
+          <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
+          <span>Service</span>
+        </button>
+        <button class="nav-item" data-view="about">
+          <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="1.8"/><path d="M12 10v6M12 7h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <span>About</span>
+        </button>
+      </nav>
+
+      <main class="content">
+        <!-- Live View -->
+        <section class="view view-active" id="view-live">
+          <div class="view-header">
+            <div>
+              <h1>Live Traffic</h1>
+              <p class="subtitle">Real-time per-application network usage</p>
+            </div>
+            <div class="header-actions">
+              <span class="status-pill" id="live-status">
+                <span class="status-dot"></span>
+                Updating…
+              </span>
+            </div>
+          </div>
+
+          <div class="speed-cards">
+            <div class="speed-card download">
+              <div class="speed-label">Download</div>
+              <div class="speed-value" id="live-download">—</div>
+              <div class="speed-sub">Current second</div>
+            </div>
+            <div class="speed-card upload">
+              <div class="speed-label">Upload</div>
+              <div class="speed-value" id="live-upload">—</div>
+              <div class="speed-sub">Current second</div>
+            </div>
+            <div class="speed-card total">
+              <div class="speed-label">Combined</div>
+              <div class="speed-value" id="live-total">—</div>
+              <div class="speed-sub" id="live-updated">—</div>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header">
+              <h2>Applications</h2>
+              <div class="range-badges" id="live-ranges"></div>
+            </div>
+            <div class="table-wrap">
+              <table class="data-table" id="live-table">
+                <thead>
+                  <tr>
+                    <th>Application</th>
+                    <th class="num">Download</th>
+                    <th class="num">Upload</th>
+                    <th class="num">Daily ↓/↑</th>
+                    <th class="num">Weekly ↓/↑</th>
+                    <th class="num">Monthly ↓/↑</th>
+                  </tr>
+                </thead>
+                <tbody id="live-tbody">
+                  <tr><td colspan="6" class="empty-state">Loading…</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </section>
+
+        <!-- Usage View -->
+        <section class="view" id="view-usage">
+          <div class="view-header">
+            <div>
+              <h1>Usage Query</h1>
+              <p class="subtitle">Historical traffic breakdown</p>
+            </div>
+          </div>
+
+          <div class="card filters-card">
+            <div class="filters-grid">
+              <label class="field">
+                <span>From</span>
+                <input type="text" id="usage-from" placeholder="yyMMddTHHmm (default: today)">
+              </label>
+              <label class="field">
+                <span>To</span>
+                <input type="text" id="usage-to" placeholder="yyMMddTHHmm (default: now)">
+              </label>
+              <label class="field">
+                <span>Target</span>
+                <select id="usage-target">
+                  <option value="totals">All apps (totals)</option>
+                  <option value="apps">By application</option>
+                  <option value="ip">Top remote IPs</option>
+                  <option value="host">Top hostnames</option>
+                </select>
+              </label>
+              <label class="field checkbox-field">
+                <input type="checkbox" id="usage-private">
+                <span>Include private IPs</span>
+              </label>
+              <button class="btn btn-primary" id="usage-query">Query</button>
+            </div>
+          </div>
+
+          <div class="card" id="usage-results-card">
+            <div class="card-header"><h2>Results</h2></div>
+            <div id="usage-results" class="usage-results">
+              <p class="empty-state">Run a query to see usage data.</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Apps View -->
+        <section class="view" id="view-apps">
+          <div class="view-header">
+            <div>
+              <h1>Applications</h1>
+              <p class="subtitle">Processes observed in the traffic database</p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <h2>App List</h2>
+              <input type="search" class="search-input" id="apps-filter" placeholder="Filter apps…">
+            </div>
+            <div class="apps-grid" id="apps-grid">
+              <p class="empty-state">Loading…</p>
+            </div>
+          </div>
+        </section>
+
+        <!-- Service View -->
+        <section class="view" id="view-service">
+          <div class="view-header">
+            <div>
+              <h1>Service Control</h1>
+              <p class="subtitle">NetM Windows service and collector status</p>
+            </div>
+            <div class="header-actions">
+              <button class="btn btn-secondary" id="service-refresh">Refresh</button>
+            </div>
+          </div>
+
+          <div class="service-grid">
+            <div class="card">
+              <div class="card-header"><h2>Windows Service</h2></div>
+              <pre class="status-output" id="service-output">Loading…</pre>
+              <div class="card-actions">
+                <button class="btn btn-primary" id="service-start">Start Service</button>
+                <button class="btn btn-danger" id="service-stop">Stop Service</button>
+              </div>
+            </div>
+            <div class="card">
+              <div class="card-header"><h2>Collector</h2></div>
+              <pre class="status-output" id="collector-output">Loading…</pre>
+            </div>
+          </div>
+        </section>
+
+        <!-- About View -->
+        <section class="view" id="view-about">
+          <div class="view-header">
+            <div>
+              <h1>About</h1>
+              <p class="subtitle">Database and installation details</p>
+            </div>
+          </div>
+          <div class="card">
+            <div class="info-grid" id="about-info">
+              <p class="empty-state">Loading…</p>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+
+  <div class="toast-container" id="toast-container" aria-live="polite"></div>
+
+  <script src="js/app.js"></script>
+</body>
+</html>

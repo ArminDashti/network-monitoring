@@ -20,7 +20,9 @@ This file provides a quick reference for the `netm` CLI commands.
 | `netm usage download` | Show only download (received) bytes for the selected time window. |
 | `netm usage upload` | Show only upload (sent) bytes for the selected time window. |
 | `netm apps list` | List application names observed in the traffic database. |
-| `netm rt` | Show per-app real-time table with download/upload plus daily, weekly, and monthly totals. |
+| `netm rt` | Live per-app table (refreshes automatically) with download/upload plus daily, weekly, and monthly totals. Press Ctrl+C to exit. |
+| `netm taskbar enable` | Show upload/download speeds in the Windows 11 taskbar (starts on login). |
+| `netm taskbar disable` | Remove the taskbar speed widget and stop auto-start. |
 
 ## Common Options
 
@@ -58,4 +60,6 @@ netm usage --target=ip --include-private=no
 netm usage --target=telegram --from-datetime=260514T0000
 netm apps list --filter=edge
 netm rt
+netm taskbar enable
+netm taskbar disable
 ```

@@ -1,5 +1,6 @@
 using NetworkMonitor.Storage;
 using Spectre.Console;
+using Spectre.Console.Rendering;
 
 namespace NetworkMonitor.Cli;
 
@@ -39,17 +40,7 @@ internal static class ConsoleUi
 
   public static void RenderKeyValues(IReadOnlyList<KeyValueLine> rows, string? caption = null)
   {
-    var table = CreateKeyValueTable(caption);
-    foreach (var row in rows)
-    {
-      var keyCell = new Markup($"[grey]{Escape(row.Key)}[/]");
-      var valueCell = row.ValueIsMarkup
-        ? new Markup(row.Value)
-        : new Markup(Escape(row.Value));
-      table.AddRow(keyCell, valueCell);
-    }
-
-    AnsiConsole.Write(table);
+    AnsiConsole.Write(BuildKeyValueRenderable(rows, caption));
     AnsiConsole.WriteLine();
   }
 
@@ -235,50 +226,89 @@ internal static class ConsoleUi
     AnsiConsole.WriteLine();
   }
 
-  public static void RenderRealtime(
-    DateTime dailyStartLocal,
-    DateTime weeklyStartLocal,
-    DateTime monthlyStartLocal,
-    DateTime nowLocal,
-    IReadOnlyList<RealtimeUsageRow> rows)
+  public static void RunRealtimeLive(
+    Func<RealtimeViewModel> loadSnapshot,
+    TimeSpan refreshInterval,
+    CancellationToken cancellationToken)
   {
-    RenderSectionHeader("Windows");
-    RenderKeyValues(
-    [
-      new("Daily", $"{dailyStartLocal:yyyy-MM-dd HH:mm:ss} → {nowLocal:yyyy-MM-dd HH:mm:ss} local"),
-      new("Weekly", $"{weeklyStartLocal:yyyy-MM-dd HH:mm:ss} → {nowLocal:yyyy-MM-dd HH:mm:ss} local"),
-      new("Monthly", $"{monthlyStartLocal:yyyy-MM-dd HH:mm:ss} → {nowLocal:yyyy-MM-dd HH:mm:ss} local"),
-    ]);
+    AnsiConsole.Live(new Markup(""))
+      .AutoClear(false)
+      .Overflow(VerticalOverflow.Ellipsis)
+      .Cropping(VerticalOverflowCropping.Top)
+      .Start(ctx =>
+      {
+        while (!cancellationToken.IsCancellationRequested)
+        {
+          ctx.UpdateTarget(BuildRealtimeView(loadSnapshot()));
+          ctx.Refresh();
 
-    RenderSectionHeader("Usage by app");
-    if (rows.Count == 0)
-    {
-      WriteNote("No traffic recorded for the current windows.");
-      return;
-    }
-
-    var table = CreateDataTable();
-    table.AddColumn(new TableColumn("[grey]App[/]").LeftAligned());
-    table.AddColumn(new TableColumn("[grey]Download[/]").RightAligned());
-    table.AddColumn(new TableColumn("[grey]Upload[/]").RightAligned());
-    table.AddColumn(new TableColumn("[grey]Daily ↓/↑[/]").RightAligned());
-    table.AddColumn(new TableColumn("[grey]Weekly ↓/↑[/]").RightAligned());
-    table.AddColumn(new TableColumn("[grey]Monthly ↓/↑[/]").RightAligned());
-
-    foreach (var row in rows)
-    {
-      table.AddRow(
-        Escape(row.AppName),
-        $"[green]{ByteFormatter.FormatMegabytes(row.CurrentDownBytes)}[/]",
-        $"[red]{ByteFormatter.FormatMegabytes(row.CurrentUpBytes)}[/]",
-        ByteFormatter.FormatDownUpPair(row.DailyDownBytes, row.DailyUpBytes),
-        ByteFormatter.FormatDownUpPair(row.WeeklyDownBytes, row.WeeklyUpBytes),
-        ByteFormatter.FormatDownUpPair(row.MonthlyDownBytes, row.MonthlyUpBytes));
-    }
-
-    AnsiConsole.Write(table);
-    AnsiConsole.WriteLine();
+          try
+          {
+            Task.Delay(refreshInterval, cancellationToken).Wait(cancellationToken);
+          }
+          catch (OperationCanceledException)
+          {
+            break;
+          }
+        }
+      });
   }
+
+  public static IRenderable BuildRealtimeView(RealtimeViewModel model)
+  {
+    var sections = new List<IRenderable>
+    {
+      new Rule($"[bold cyan]{Escape("Windows")}[/]").RuleStyle("grey37"),
+      BuildKeyValueRenderable(
+      [
+        new("Daily", $"{model.DailyStartLocal:yyyy-MM-dd HH:mm:ss} → {model.NowLocal:yyyy-MM-dd HH:mm:ss} local"),
+        new("Weekly", $"{model.WeeklyStartLocal:yyyy-MM-dd HH:mm:ss} → {model.NowLocal:yyyy-MM-dd HH:mm:ss} local"),
+        new("Monthly", $"{model.MonthlyStartLocal:yyyy-MM-dd HH:mm:ss} → {model.NowLocal:yyyy-MM-dd HH:mm:ss} local"),
+      ]),
+      new Rule($"[bold cyan]{Escape("Usage by app")}[/]").RuleStyle("grey37"),
+    };
+
+    if (model.Rows.Count == 0)
+    {
+      sections.Add(new Markup($"[grey50]{Escape("No traffic recorded for the current windows.")}[/]"));
+    }
+    else
+    {
+      var table = CreateDataTable();
+      table.AddColumn(new TableColumn("[grey]App[/]").LeftAligned());
+      table.AddColumn(new TableColumn("[grey]Download[/]").RightAligned());
+      table.AddColumn(new TableColumn("[grey]Upload[/]").RightAligned());
+      table.AddColumn(new TableColumn("[grey]Daily ↓/↑[/]").RightAligned());
+      table.AddColumn(new TableColumn("[grey]Weekly ↓/↑[/]").RightAligned());
+      table.AddColumn(new TableColumn("[grey]Monthly ↓/↑[/]").RightAligned());
+
+      foreach (var row in model.Rows)
+      {
+        table.AddRow(
+          Escape(row.AppName),
+          $"[green]{ByteFormatter.FormatMegabytes(row.CurrentDownBytes)}[/]",
+          $"[red]{ByteFormatter.FormatMegabytes(row.CurrentUpBytes)}[/]",
+          ByteFormatter.FormatDownUpPair(row.DailyDownBytes, row.DailyUpBytes),
+          ByteFormatter.FormatDownUpPair(row.WeeklyDownBytes, row.WeeklyUpBytes),
+          ByteFormatter.FormatDownUpPair(row.MonthlyDownBytes, row.MonthlyUpBytes));
+      }
+
+      sections.Add(table);
+    }
+
+    sections.Add(new Markup(
+      $"[grey50]Updated {model.NowLocal:yyyy-MM-dd HH:mm:ss} local · refresh {model.RefreshIntervalSeconds}s · Ctrl+C to exit[/]"));
+
+    return new Rows(sections);
+  }
+
+  internal readonly record struct RealtimeViewModel(
+    DateTime DailyStartLocal,
+    DateTime WeeklyStartLocal,
+    DateTime MonthlyStartLocal,
+    DateTime NowLocal,
+    int RefreshIntervalSeconds,
+    IReadOnlyList<RealtimeUsageRow> Rows);
 
   internal readonly record struct RealtimeUsageRow(
     string AppName,
@@ -333,10 +363,25 @@ internal static class ConsoleUi
     return table;
   }
 
+  private static Table BuildKeyValueRenderable(IReadOnlyList<KeyValueLine> rows, string? caption = null)
+  {
+    var table = CreateKeyValueTable(caption);
+    foreach (var row in rows)
+    {
+      var keyCell = new Markup($"[grey]{Escape(row.Key)}[/]");
+      var valueCell = row.ValueIsMarkup
+        ? new Markup(row.Value)
+        : new Markup(Escape(row.Value));
+      table.AddRow(keyCell, valueCell);
+    }
+
+    return table;
+  }
+
   private static Table CreateDataTable() =>
     new Table()
       .Border(TableBorder.Rounded)
-      .BorderColor(Color.Grey37)
+      .BorderColor(Spectre.Console.Color.Grey37)
       .Expand();
 
   private static string Escape(string? value) =>

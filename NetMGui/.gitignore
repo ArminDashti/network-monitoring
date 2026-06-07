@@ -1,0 +1,10 @@
+# NetM GUI dependencies
+node_modules/
+dist/
+
+# Native build artifacts
+*.node
+
+# OS
+.DS_Store
+Thumbs.db

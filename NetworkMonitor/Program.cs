@@ -3,6 +3,9 @@ using System.Reflection;
 using NetworkMonitor.Cli;
 using NetworkMonitor.Services;
 using NetworkMonitor.Storage;
+#if WINDOWS
+using NetworkMonitor.Taskbar;
+#endif
 
 namespace NetworkMonitor;
 
@@ -10,11 +13,15 @@ internal static class Program
 {
   private static string DefaultDbPath => NetmConfig.Load().ResolvedDatabasePath;
 
+  [STAThread]
   public static async Task<int> Main(string[] args)
   {
 #if WINDOWS
     if (args.Length > 0 && args[0].Equals("run", StringComparison.OrdinalIgnoreCase))
       return await ServiceHostRunner.RunAsync(args[1..]);
+
+    if (IsTaskbarRunInvocation(args))
+      return TaskbarWidgetManager.RunWidget();
 #endif
 
     if (IsCollectInvocation(args))
@@ -125,6 +132,27 @@ internal static class Program
       serviceStatus,
     };
     root.AddCommand(service);
+
+    var taskbarEnable = new Command("enable", "Show upload/download speeds in the Windows taskbar");
+    taskbarEnable.SetHandler(() =>
+    {
+      var code = TaskbarWidgetManager.Enable();
+      Environment.Exit(code);
+    });
+
+    var taskbarDisable = new Command("disable", "Remove the taskbar speed widget");
+    taskbarDisable.SetHandler(() =>
+    {
+      var code = TaskbarWidgetManager.Disable();
+      Environment.Exit(code);
+    });
+
+    var taskbar = new Command("taskbar", "Taskbar network speed widget")
+    {
+      taskbarEnable,
+      taskbarDisable,
+    };
+    root.AddCommand(taskbar);
 #endif
 
     return await root.InvokeAsync(args);
@@ -132,6 +160,13 @@ internal static class Program
 
   private static bool IsCollectInvocation(string[] args) =>
     args.Length > 0 && args[0].Equals("collect", StringComparison.OrdinalIgnoreCase);
+
+#if WINDOWS
+  private static bool IsTaskbarRunInvocation(string[] args) =>
+    args.Length >= 2
+    && args[0].Equals("taskbar", StringComparison.OrdinalIgnoreCase)
+    && args[1].Equals("run", StringComparison.OrdinalIgnoreCase);
+#endif
 
   private static async Task<int> RunCollectAsync()
   {
@@ -430,6 +465,22 @@ internal static class Program
 
   private static void RunRealtime(string dbPath)
   {
+    dbPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(dbPath));
+    var refreshSeconds = Math.Max(1, NetmConfig.Load().SamplingIntervalSeconds);
+    var refreshInterval = TimeSpan.FromSeconds(refreshSeconds);
+
+    using var cts = new CancellationTokenSource();
+    Console.CancelKeyPress += (_, e) =>
+    {
+      e.Cancel = true;
+      cts.Cancel();
+    };
+
+    ConsoleUi.RunRealtimeLive(() => LoadRealtimeSnapshot(dbPath, refreshSeconds), refreshInterval, cts.Token);
+  }
+
+  private static ConsoleUi.RealtimeViewModel LoadRealtimeSnapshot(string dbPath, int refreshIntervalSeconds)
+  {
     var nowLocal = DateTime.Now;
     var dailyStartLocal = nowLocal.Date;
     var weeklyStartLocal = StartOfCurrentWeekSaturday(nowLocal);
@@ -478,7 +529,13 @@ internal static class Program
         monthly.BytesSent));
     }
 
-    ConsoleUi.RenderRealtime(dailyStartLocal, weeklyStartLocal, monthlyStartLocal, nowLocal, rows);
+    return new ConsoleUi.RealtimeViewModel(
+      dailyStartLocal,
+      weeklyStartLocal,
+      monthlyStartLocal,
+      nowLocal,
+      refreshIntervalSeconds,
+      rows);
   }
 
   private static bool ParseIncludePrivate(string raw)
