@@ -1,7 +1,28 @@
 ```
+# Exported runtime (created by netvan-core/export.ps1)
+netvan/*
+!netvan/.gitkeep
+
+# Legacy install directories
+NetvanExport/
+NetvanLocal/
+_test_install/
+
+# Legacy project artifacts
+NetworkMonitor/
+NetworkMonitoring/
+
+# Runtime data
+traffic.db
+settings.json
+
+# Cursor agent state
+.cursor/hooks/state/
+
 # Exporter assets (downloaded once by export.ps1)
-assets/*
-!assets/.gitkeep
+netvan-core/assets/*
+!netvan-core/assets/.gitkeep
+!netvan-core/assets/README.md
 
 # Build artifacts
 *.exe

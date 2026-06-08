@@ -1,19 +1,19 @@
 # Netvan — key points
 
 ## Data directory
-- Default install path: `.\NetvanExport\` via `export.ps1` (override with `--path=<dir>` or `-InstallDir`).
+- Default install path: `.\netvan\` via `netvan-core\export.ps1` (override with `--path=<dir>` or `-InstallDir`).
 - Legacy/default data dir when not using installer: `%LocalAppData%\NetM\` (`traffic.db`, `settings.json`).
 - Override with `NETM_HOME` environment variable.
 
 ## Commands
 - Collection is **daemon-only**: `netm service install` / `start` (Windows service). Foreground `collect` removed.
 - `netm info`, `netm usage`, `netm apps list`, `netm rt` — query SQLite.
-- `export.ps1` stops NetM service, wipes install dir, publishes, sets PATH/NETM_HOME, then installs/starts service when elevated; `-SkipService` for binaries only.
+- `netvan-core\export.ps1` stops NetM service, wipes install dir, publishes, sets PATH/NETM_HOME, then installs/starts service when elevated; `-SkipService` for binaries only.
 
 ## Build
 - Target frameworks: `net9.0` (portable queries) and `net9.0-windows` (TCP collection).
-- Build Windows CLI: `dotnet build Netvan/Netvan.csproj -c Release -f net9.0-windows`
-- `export.ps1` always `dotnet publish`s from the local repo into `.\NetvanExport` (no GitHub release download).
+- Build Windows CLI: `dotnet build netvan-core/Netvan.csproj -c Release -f net9.0-windows`
+- `netvan-core\export.ps1` always `dotnet publish`s from the local repo into `.\netvan` (no GitHub release download).
 
 ## Windows APIs
 - IPv6 TCP table APIs are optional (skipped when exports missing from `iphlpapi.dll`).

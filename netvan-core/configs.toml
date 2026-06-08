@@ -1,0 +1,25 @@
+# Netvan Configuration
+
+# Database path (default: %LocalAppData%\NetM\traffic.db)
+database_path = "%NETM_HOME%\\traffic.db"
+
+# Monitoring settings
+[monitoring]
+# Enable/disable monitoring
+enabled = true
+# Sampling interval in seconds
+sampling_interval = 1
+
+# Storage settings
+[storage]
+# Maximum database size in MB
+max_size_mb = 500
+# Retention period in days
+retention_days = 30
+
+# Logging settings
+[logging]
+# Log level: Debug, Info, Warning, Error
+level = "Info"
+# Log file path
+log_file = "%NETM_HOME%\\netm.log"

@@ -7,22 +7,22 @@ A **Windows** console application that tracks **TCP** network usage over time: w
 From the repository root, run the installer in an elevated PowerShell terminal (Administrator required for the Windows service):
 
 ```powershell
-# Build and publish to .\NetvanExport
-.\export.ps1
+# Build and publish to .\netvan
+.\netvan-core\export.ps1
 
 # Custom install directory
-.\export.ps1 --path=C:\Tools\NetM
+.\netvan-core\export.ps1 --path=C:\Tools\NetM
 
 # Binaries only (skip Windows service install)
-.\export.ps1 -SkipService
+.\netvan-core\export.ps1 -SkipService
 ```
 
 The installer will:
 - Stop the NetM Windows service if it is running
-- Delete all files in the install directory (default `.\NetvanExport`, or `--path=<dir>`)
+- Delete all files in the install directory (default `.\netvan`, or `--path=<dir>`)
 - Build and publish `netm.exe` from the local source into that directory
 - Copy `configs.toml` from the repository (or create defaults)
-- Extract `sqlite3.exe` from the bundled SQLite tools zip in `assets/`
+- Extract `sqlite3.exe` from the bundled SQLite tools zip in `netvan-core/assets/`
 - Add the folder to your user PATH and set `NETM_HOME`
 - Install and start the NetM Windows service by default when run as Administrator
 
@@ -129,10 +129,10 @@ netm service start
 netm service status
 ```
 
-`export.ps1` installs and starts the service by default when run as Administrator. Use `-SkipService` to install binaries only.
+`netvan-core\export.ps1` installs and starts the service by default when run as Administrator. Use `-SkipService` to install binaries only.
 
 ```powershell
-.\export.ps1 -SetEnvVars
+.\netvan-core\export.ps1 -SetEnvVars
 ```
 
 Stop or remove the service:
@@ -152,9 +152,9 @@ Default database: `%LocalAppData%\NetM\traffic.db` (override with `--db` on `ser
 
 ```powershell
 git clone https://github.com/ArminDashti/netvan.git
-cd netvan
+cd network-monitoring
 # Elevated PowerShell for daemon install:
-.\export.ps1 -SetEnvVars
+.\netvan-core\export.ps1 -SetEnvVars
 # Restart terminal, then:
 netm service status
 netm info
@@ -181,26 +181,29 @@ netm usage --target=apps
 ## Build
 
 ```powershell
-dotnet build Netvan\Netvan.csproj -c Release
+dotnet build netvan-core\Netvan.csproj -c Release
 ```
 
 To publish a self-contained Windows executable:
 
 ```powershell
-dotnet publish Netvan\Netvan.csproj -c Release -f net9.0-windows -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o .\publish
+dotnet publish netvan-core\Netvan.csproj -c Release -f net9.0-windows -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o .\publish
 ```
 
 ## Project layout
 
 | Path | Role |
 |------|------|
-| `Netvan/Program.cs` | CLI (`start`, `stop`, `status`, `info`, `usage`, `apps`, `rt`) |
-| `Netvan/Services/CollectionLoop.cs` | Background sampling loop |
-| `Netvan/Services/DaemonManager.cs` | PID file and process control |
-| `Netvan/Services/` | Background runner, Windows service host, and traffic collection |
-| `Netvan/Cli/` | Target parsing and datetime helpers |
-| `Netvan/Services/TrafficCollector.cs` | TCP sampling and deltas |
-| `Netvan/Storage/TrafficStore.cs` | SQLite schema and queries |
+| `netvan-core/` | C# CLI source, build scripts, and `export.ps1` |
+| `netvan-gui/` | Electron GUI (`start-gui.ps1`) |
+| `netvan/` | Published binaries ready to use (output of `export.ps1`) |
+| `netvan-core/Program.cs` | CLI (`start`, `stop`, `status`, `info`, `usage`, `apps`, `rt`) |
+| `netvan-core/Services/CollectionLoop.cs` | Background sampling loop |
+| `netvan-core/Services/DaemonManager.cs` | PID file and process control |
+| `netvan-core/Services/` | Background runner, Windows service host, and traffic collection |
+| `netvan-core/Cli/` | Target parsing and datetime helpers |
+| `netvan-core/Services/TrafficCollector.cs` | TCP sampling and deltas |
+| `netvan-core/Storage/TrafficStore.cs` | SQLite schema and queries |
 
 ## NuGet restore
 
