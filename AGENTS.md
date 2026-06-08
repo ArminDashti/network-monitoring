@@ -1,7 +1,7 @@
 ## Learned User Preferences
 
 - Prefer local `dotnet publish` via `export.ps1` over GitHub release downloads; CI/workflows were removed from this repo.
-- Install and redeploy through `export.ps1` (successor to `install.ps1`); default output is `.\NetworkMonitoringExport`, override with `--path=<dir>` or `-InstallDir`.
+- Install and redeploy through `export.ps1` (successor to `install.ps1`); default output is `.\NetvanExport`, override with `--path=<dir>` or `-InstallDir`.
 - When narrowing scope ("we only need X" or "remove all codes belonging to"), delete obsolete commands and code paths instead of leaving them in place.
 - Interactive CLI views such as `netm rt` must refresh in real time, not print one-shot snapshots.
 - Keep `COMMANDS.md` as the maintained canonical command reference.

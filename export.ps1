@@ -1,5 +1,5 @@
-# Network Monitor Exporter
-# Builds from the local repository and publishes to .\NetworkMonitoringExport
+# Netvan Exporter
+# Builds from the local repository and publishes to .\NetvanExport
 
 param(
     [Alias("path")]
@@ -12,7 +12,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 
-# Resolve install directory: -InstallDir, -path, --path=<dir>, or .\NetworkMonitoringExport
+# Resolve install directory: -InstallDir, -path, --path=<dir>, or .\NetvanExport
 $PathFromArgs = $null
 foreach ($arg in $args) {
     if ($arg -match '^(?:--|-)path=(.+)$') {
@@ -25,7 +25,7 @@ if (-not $InstallDir) {
         $InstallDir = $PathFromArgs
     }
     else {
-        $InstallDir = Join-Path $PSScriptRoot "NetworkMonitoringExport"
+        $InstallDir = Join-Path $PSScriptRoot "NetvanExport"
     }
 }
 $InstallDir = [System.IO.Path]::GetFullPath($InstallDir)
@@ -241,7 +241,7 @@ function Remove-NetMServiceIfPresent {
 
     if ($service) {
         if ($service.Status -notin @("Stopped", "StopPending")) {
-            Write-Info "Stopping '$serviceName' Windows service (Network Monitor)..."
+            Write-Info "Stopping '$serviceName' Windows service (Netvan)..."
             if (Test-Path $netmExe) {
                 & $netmExe service stop 2>$null | Out-Null
             }
@@ -353,7 +353,7 @@ function Ensure-DefaultConfig {
 
     Write-Info "Creating default configuration file..."
     $DefaultConfig = @"
-# Network Monitor Configuration
+# Netvan Configuration
 
 # Database path (default: %LocalAppData%\NetM\traffic.db)
 database_path = "%NETM_HOME%\\traffic.db"
@@ -481,7 +481,7 @@ if (-not (Get-Command dotnet -ErrorAction SilentlyContinue)) {
     Write-Error-Exit ".NET SDK not found. Install .NET 9 SDK, then run export.ps1 again."
 }
 
-$LocalProject = Join-Path $PSScriptRoot "NetworkMonitor\NetworkMonitor.csproj"
+$LocalProject = Join-Path $PSScriptRoot "Netvan\Netvan.csproj"
 if (-not (Test-Path $LocalProject)) {
     Write-Error-Exit "Project not found at $LocalProject. Run export.ps1 from the repository root."
 }
@@ -548,7 +548,7 @@ if (-not $SkipService) {
 if (Test-Path $NetmExe) {
     Write-Success "Installation complete! Files installed to: $InstallDir"
     Write-Info "Installed files:"
-    Write-Info "  - netm.exe (Network Monitor CLI)"
+    Write-Info "  - netm.exe (Netvan CLI)"
     if (Test-Path $SqliteExe) {
         Write-Info "  - sqlite3.exe (SQLite CLI tool)"
     }

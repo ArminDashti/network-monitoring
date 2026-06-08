@@ -1,7 +1,7 @@
-# Network Monitor — key points
+# Netvan — key points
 
 ## Data directory
-- Default install path: `.\NetworkMonitoringExport\` via `export.ps1` (override with `--path=<dir>` or `-InstallDir`).
+- Default install path: `.\NetvanExport\` via `export.ps1` (override with `--path=<dir>` or `-InstallDir`).
 - Legacy/default data dir when not using installer: `%LocalAppData%\NetM\` (`traffic.db`, `settings.json`).
 - Override with `NETM_HOME` environment variable.
 
@@ -12,8 +12,8 @@
 
 ## Build
 - Target frameworks: `net9.0` (portable queries) and `net9.0-windows` (TCP collection).
-- Build Windows CLI: `dotnet build NetworkMonitor/NetworkMonitor.csproj -c Release -f net9.0-windows`
-- `export.ps1` always `dotnet publish`s from the local repo into `.\NetworkMonitoringExport` (no GitHub release download).
+- Build Windows CLI: `dotnet build Netvan/Netvan.csproj -c Release -f net9.0-windows`
+- `export.ps1` always `dotnet publish`s from the local repo into `.\NetvanExport` (no GitHub release download).
 
 ## Windows APIs
 - IPv6 TCP table APIs are optional (skipped when exports missing from `iphlpapi.dll`).

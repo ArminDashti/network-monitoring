@@ -10,8 +10,8 @@ function findNetmExecutable() {
   const home = resolveHome();
   const candidates = [
     path.join(home, 'netm.exe'),
-    path.join(process.cwd(), '..', 'NetworkMonitoringExport', 'netm.exe'),
-    path.join(process.cwd(), '..', 'NetworkMonitor', 'bin', 'Debug', 'net9.0-windows', 'netm.exe'),
+    path.join(process.cwd(), '..', 'NetvanExport', 'netm.exe'),
+    path.join(process.cwd(), '..', 'Netvan', 'bin', 'Debug', 'net9.0-windows', 'netm.exe'),
     'netm',
   ];
 

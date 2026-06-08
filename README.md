@@ -1,4 +1,4 @@
-# Network Monitor (`netm`)
+# Netvan (`netm`)
 
 A **Windows** console application that tracks **TCP** network usage over time: which applications send and receive data, which remote IPs and hostnames they talk to, and which network adapter (NIC) carries the traffic. Samples are stored in a local **SQLite** database. Start the background collector with `netm start` and query history with `netm usage`, `netm apps list`, and `netm rt`.
 
@@ -7,7 +7,7 @@ A **Windows** console application that tracks **TCP** network usage over time: w
 From the repository root, run the installer in an elevated PowerShell terminal (Administrator required for the Windows service):
 
 ```powershell
-# Build and publish to .\NetworkMonitoringExport
+# Build and publish to .\NetvanExport
 .\export.ps1
 
 # Custom install directory
@@ -19,7 +19,7 @@ From the repository root, run the installer in an elevated PowerShell terminal (
 
 The installer will:
 - Stop the NetM Windows service if it is running
-- Delete all files in the install directory (default `.\NetworkMonitoringExport`, or `--path=<dir>`)
+- Delete all files in the install directory (default `.\NetvanExport`, or `--path=<dir>`)
 - Build and publish `netm.exe` from the local source into that directory
 - Copy `configs.toml` from the repository (or create defaults)
 - Extract `sqlite3.exe` from the bundled SQLite tools zip in `assets/`
@@ -151,8 +151,8 @@ Default database: `%LocalAppData%\NetM\traffic.db` (override with `--db` on `ser
 ## Quick start
 
 ```powershell
-git clone https://github.com/ArminDashti/network-monitoring.git
-cd network-monitoring
+git clone https://github.com/ArminDashti/netvan.git
+cd netvan
 # Elevated PowerShell for daemon install:
 .\export.ps1 -SetEnvVars
 # Restart terminal, then:
@@ -181,26 +181,26 @@ netm usage --target=apps
 ## Build
 
 ```powershell
-dotnet build NetworkMonitor\NetworkMonitor.csproj -c Release
+dotnet build Netvan\Netvan.csproj -c Release
 ```
 
 To publish a self-contained Windows executable:
 
 ```powershell
-dotnet publish NetworkMonitor\NetworkMonitor.csproj -c Release -f net9.0-windows -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o .\publish
+dotnet publish Netvan\Netvan.csproj -c Release -f net9.0-windows -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o .\publish
 ```
 
 ## Project layout
 
 | Path | Role |
 |------|------|
-| `NetworkMonitor/Program.cs` | CLI (`start`, `stop`, `status`, `info`, `usage`, `apps`, `rt`) |
-| `NetworkMonitor/Services/CollectionLoop.cs` | Background sampling loop |
-| `NetworkMonitor/Services/DaemonManager.cs` | PID file and process control |
-| `NetworkMonitor/Services/` | Background runner, Windows service host, and traffic collection |
-| `NetworkMonitor/Cli/` | Target parsing and datetime helpers |
-| `NetworkMonitor/Services/TrafficCollector.cs` | TCP sampling and deltas |
-| `NetworkMonitor/Storage/TrafficStore.cs` | SQLite schema and queries |
+| `Netvan/Program.cs` | CLI (`start`, `stop`, `status`, `info`, `usage`, `apps`, `rt`) |
+| `Netvan/Services/CollectionLoop.cs` | Background sampling loop |
+| `Netvan/Services/DaemonManager.cs` | PID file and process control |
+| `Netvan/Services/` | Background runner, Windows service host, and traffic collection |
+| `Netvan/Cli/` | Target parsing and datetime helpers |
+| `Netvan/Services/TrafficCollector.cs` | TCP sampling and deltas |
+| `Netvan/Storage/TrafficStore.cs` | SQLite schema and queries |
 
 ## NuGet restore
 

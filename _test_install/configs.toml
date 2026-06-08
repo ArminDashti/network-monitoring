@@ -1,4 +1,4 @@
-# Network Monitor Configuration
+# Netvan Configuration
 
 # Database path (default: %LocalAppData%\NetM\traffic.db)
 database_path = "%NETM_HOME%\\traffic.db"
