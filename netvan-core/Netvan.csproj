@@ -8,7 +8,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
     <RootNamespace>Netvan</RootNamespace>
-    <AssemblyName>netm</AssemblyName>
+    <AssemblyName>netvan</AssemblyName>
     <Description>Netvan: live TCP collection on Windows (IP Helper); report and usage from SQLite on all platforms.</Description>
   </PropertyGroup>
 

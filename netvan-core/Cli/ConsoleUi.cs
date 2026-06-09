@@ -63,57 +63,6 @@ internal static class ConsoleUi
     ]);
   }
 
-  public static void RenderDaemonStatus(
-    string home,
-    string configPath,
-    string databasePath,
-    bool isRunning,
-    bool isStale,
-    int? processId,
-    DateTime? startedUtc,
-    TimeSpan? uptime,
-    int? intervalSeconds,
-    long? rowCount,
-    string? lastMinuteUtc,
-    string? databaseError)
-  {
-    RenderSectionHeader("Collector");
-
-    var statusMarkup = isRunning
-      ? "[green]running[/]"
-      : isStale
-        ? "[yellow]stopped[/] [grey](stale PID)[/]"
-        : "[red]stopped[/]";
-
-    var rows = new List<KeyValueLine>
-    {
-      new("Status", statusMarkup, ValueIsMarkup: true),
-      new("Home", home),
-      new("Config", configPath),
-      new("Database", databasePath),
-    };
-
-    if (isRunning && processId is not null)
-    {
-      rows.Add(new("PID", processId.Value.ToString()));
-      if (startedUtc is not null)
-        rows.Add(new("Started", $"{startedUtc.Value:O} UTC"));
-      if (uptime is not null)
-        rows.Add(new("Uptime", FormatUptime(uptime.Value)));
-      if (intervalSeconds is not null)
-        rows.Add(new("Interval", $"{intervalSeconds.Value}s"));
-      if (rowCount is not null)
-        rows.Add(new("Rows", rowCount.Value.ToString("N0")));
-      if (lastMinuteUtc is not null)
-        rows.Add(new("Last UTC", lastMinuteUtc));
-    }
-
-    if (databaseError is not null)
-      rows.Add(new("Database", $"[yellow]unavailable[/] ({Escape(databaseError)})", ValueIsMarkup: true));
-
-    RenderKeyValues(rows);
-  }
-
   public static void RenderServiceStatus(
     bool installed,
     string? serviceName,
@@ -124,7 +73,7 @@ internal static class ConsoleUi
     {
       RenderSectionHeader("Windows service");
       WriteWarning($"Service '{serviceName}' is not installed.");
-      WriteNote("Install with: [cyan]netm service install[/]");
+      WriteNote("Install with: [cyan]netvan service install[/]");
       return;
     }
 
@@ -135,7 +84,7 @@ internal static class ConsoleUi
       new("Display", displayName ?? ""),
       new("Status", status ?? "unknown"),
     ]);
-    WriteNote("Start: [cyan]netm service start[/]  ·  Stop: [cyan]netm service stop[/]");
+    WriteNote("Start: [cyan]netvan service start[/]  ·  Stop: [cyan]netvan service stop[/]");
   }
 
   public static void RenderUsageContext(string fromUtc, string toUtc, string targetLabel, bool includePrivate)
@@ -386,13 +335,4 @@ internal static class ConsoleUi
 
   private static string Escape(string? value) =>
     Markup.Escape(value ?? string.Empty);
-
-  private static string FormatUptime(TimeSpan uptime)
-  {
-    if (uptime.TotalDays >= 1)
-      return $"{(int)uptime.TotalDays}d {uptime.Hours}h {uptime.Minutes}m";
-    if (uptime.TotalHours >= 1)
-      return $"{uptime.Hours}h {uptime.Minutes}m {uptime.Seconds}s";
-    return $"{uptime.Minutes}m {uptime.Seconds}s";
-  }
 }

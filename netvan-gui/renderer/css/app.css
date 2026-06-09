@@ -251,9 +251,26 @@ body {
 
 .card-actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   padding: 16px 20px;
   border-top: 1px solid var(--border-subtle);
+}
+
+.card-subtitle {
+  margin-top: 4px;
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.reset-card {
+  margin-top: 20px;
+}
+
+.reset-actions {
+  border-top: none;
+  padding-top: 0;
 }
 
 /* Speed cards */
@@ -583,6 +600,57 @@ body {
   max-height: 320px;
   overflow-y: auto;
   margin: 0;
+}
+
+/* Settings */
+.settings-list {
+  display: flex;
+  flex-direction: column;
+}
+
+.settings-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--border-subtle);
+  cursor: pointer;
+  transition: background var(--transition);
+}
+
+.settings-row:last-child {
+  border-bottom: none;
+}
+
+.settings-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.settings-copy {
+  flex: 1;
+  min-width: 0;
+}
+
+.settings-title {
+  font-size: 14px;
+  font-weight: 500;
+  color: var(--text-primary);
+  margin-bottom: 4px;
+}
+
+.settings-desc {
+  font-size: 13px;
+  color: var(--text-secondary);
+  line-height: 1.45;
+}
+
+.settings-row input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
 }
 
 /* About */

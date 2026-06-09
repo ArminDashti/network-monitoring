@@ -6,7 +6,7 @@ namespace Netvan.Services;
 
 internal static class WindowsServiceManager
 {
-    public const string ServiceName = "NetM";
+    public const string ServiceName = "Netvan";
     public const string DisplayName = "Netvan";
 
     public static bool IsInstalled()
@@ -60,7 +60,7 @@ internal static class WindowsServiceManager
 
         if (IsInstalled())
         {
-            message = $"Service '{ServiceName}' is already installed. Run 'netm service uninstall' first to reinstall.";
+            message = $"Service '{ServiceName}' is already installed. Run 'netvan service uninstall' first to reinstall.";
             return 1;
         }
 
@@ -73,7 +73,7 @@ internal static class WindowsServiceManager
         }
 
         RunSc($"description {ServiceName} \"Samples TCP traffic into a local SQLite database.\"", out _);
-        message = $"Installed service '{ServiceName}'. Start with: netm service start";
+        message = $"Installed service '{ServiceName}'. Start with: netvan service start";
         return 0;
     }
 
@@ -114,7 +114,7 @@ internal static class WindowsServiceManager
     {
         if (!IsInstalled())
         {
-            message = $"Service '{ServiceName}' is not installed. Run: netm service install";
+            message = $"Service '{ServiceName}' is not installed. Run: netvan service install";
             return 1;
         }
 

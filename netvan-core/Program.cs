@@ -11,7 +11,7 @@ namespace Netvan;
 
 internal static class Program
 {
-  private static string DefaultDbPath => NetmConfig.Load().ResolvedDatabasePath;
+  private static string DefaultDbPath => NetvanConfig.Load().ResolvedDatabasePath;
 
   [STAThread]
   public static async Task<int> Main(string[] args)
@@ -22,12 +22,12 @@ internal static class Program
 
     if (IsTaskbarRunInvocation(args))
       return TaskbarWidgetManager.RunWidget();
+
+    if (args.Length == 0)
+      return GuiLauncher.Launch();
 #endif
 
-    if (IsCollectInvocation(args))
-      return await RunCollectAsync();
-
-    Directory.CreateDirectory(NetmPaths.Home);
+    Directory.CreateDirectory(NetvanPaths.Home);
     SettingsManager.Initialize();
 
     var dbOption = new Option<string>(
@@ -68,26 +68,11 @@ internal static class Program
     };
     rt.SetHandler(RunRealtime, dbOption);
 
-    var start = new Command("start", "Start background traffic collector");
-    start.SetHandler(() => DaemonManager.Start());
+    var reset = new Command("reset", "Remove the traffic database and restart the service (clears in-memory counters)");
+    reset.SetHandler(() => RunReset());
 
-    var stop = new Command("stop", "Stop background traffic collector");
-    stop.SetHandler(() => DaemonManager.Stop());
-
-    var status = new Command("status", "Show collector status");
-    status.SetHandler(() => DaemonManager.Status());
-
-    var reset = new Command("reset", "Remove the traffic database and restart the collector (clears in-memory counters)")
+    var root = new RootCommand("Windows TCP usage monitor (netvan)")
     {
-      dbOption,
-    };
-    reset.SetHandler(dbPath => RunReset(dbPath), dbOption);
-
-    var root = new RootCommand("Windows TCP usage monitor (netm)")
-    {
-      start,
-      stop,
-      status,
       reset,
       info,
       usage,
@@ -104,26 +89,26 @@ internal static class Program
       Arity = ArgumentArity.ZeroOrOne,
     };
 
-    var serviceInstall = new Command("install", "Install the NetM Windows service (Administrator required)")
+    var serviceInstall = new Command("install", "Install the Netvan Windows service (Administrator required)")
     {
       dbOption,
       intervalOption,
     };
     serviceInstall.SetHandler(RunServiceInstall, dbOption, intervalOption);
 
-    var serviceUninstall = new Command("uninstall", "Remove the NetM Windows service (Administrator required)");
+    var serviceUninstall = new Command("uninstall", "Remove the Netvan Windows service (Administrator required)");
     serviceUninstall.SetHandler(RunServiceUninstall);
 
-    var serviceStart = new Command("start", "Start the NetM Windows service");
+    var serviceStart = new Command("start", "Start the Netvan Windows service");
     serviceStart.SetHandler(RunServiceStart);
 
-    var serviceStop = new Command("stop", "Stop the NetM Windows service");
+    var serviceStop = new Command("stop", "Stop the Netvan Windows service");
     serviceStop.SetHandler(RunServiceStop);
 
-    var serviceStatus = new Command("status", "Show NetM Windows service status");
+    var serviceStatus = new Command("status", "Show Netvan Windows service status");
     serviceStatus.SetHandler(RunServiceStatus);
 
-    var service = new Command("service", "Manage the NetM Windows service (daemon mode)")
+    var service = new Command("service", "Manage the Netvan Windows service")
     {
       serviceInstall,
       serviceUninstall,
@@ -158,77 +143,12 @@ internal static class Program
     return await root.InvokeAsync(args);
   }
 
-  private static bool IsCollectInvocation(string[] args) =>
-    args.Length > 0 && args[0].Equals("collect", StringComparison.OrdinalIgnoreCase);
-
 #if WINDOWS
   private static bool IsTaskbarRunInvocation(string[] args) =>
     args.Length >= 2
     && args[0].Equals("taskbar", StringComparison.OrdinalIgnoreCase)
     && args[1].Equals("run", StringComparison.OrdinalIgnoreCase);
 #endif
-
-  private static async Task<int> RunCollectAsync()
-  {
-#if WINDOWS
-    SettingsManager.Initialize();
-    var config = NetmConfig.Load();
-    NetmLog.Configure(config);
-
-    var pid = Environment.ProcessId;
-    if (DaemonManager.TryReadState(out var existing) && existing.ProcessId != pid && existing.ProcessId > 0)
-    {
-      try
-      {
-        var other = System.Diagnostics.Process.GetProcessById(existing.ProcessId);
-        if (!other.HasExited && existing.ProcessId != pid)
-        {
-          NetmLog.Error($"Another collector is already running (PID {existing.ProcessId}).");
-          return 1;
-        }
-      }
-      catch (ArgumentException)
-      {
-        // Stale PID file; overwrite below.
-      }
-    }
-
-    DaemonManager.WriteState(new DaemonState(pid, DateTime.UtcNow, config.ResolvedDatabasePath));
-
-    using var cts = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, e) =>
-    {
-      e.Cancel = true;
-      cts.Cancel();
-    };
-
-    AppDomain.CurrentDomain.ProcessExit += (_, _) => cts.Cancel();
-
-    try
-    {
-      using var loop = new CollectionLoop(config);
-      await loop.RunAsync(cts.Token);
-      return 0;
-    }
-    catch (OperationCanceledException)
-    {
-      return 0;
-    }
-    catch (Exception ex)
-    {
-      NetmLog.Error($"Collector exited: {ex.Message}");
-      return 1;
-    }
-    finally
-    {
-      DaemonManager.ClearState();
-    }
-#else
-    await Task.CompletedTask;
-    ConsoleUi.WriteError("Traffic collection requires Windows (net9.0-windows build).");
-    return 1;
-#endif
-  }
 
   private sealed record UsageOptions(
     Option<string?> Target,
@@ -334,13 +254,12 @@ internal static class Program
   }
 #endif
 
-  private static int RunReset(string dbPath)
+  private static int RunReset()
   {
-    dbPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(dbPath));
+    var dbPath = DefaultDbPath;
 
 #if WINDOWS
     var restartService = WindowsServiceManager.IsInstalled() && WindowsServiceManager.IsRunning();
-    var restartDaemon = !restartService && DaemonManager.IsCollectorRunning();
 
     if (restartService)
     {
@@ -351,17 +270,10 @@ internal static class Program
         return stopCode;
       }
 
-      ConsoleUi.WriteNote("NetM service stopped for reset.");
-    }
-    else if (restartDaemon)
-    {
-      var stopCode = DaemonManager.Stop();
-      if (stopCode != 0)
-        return stopCode;
+      ConsoleUi.WriteNote("Netvan service stopped for reset.");
     }
 #else
     const bool restartService = false;
-    const bool restartDaemon = false;
 #endif
 
     var removed = TrafficDatabase.DeleteFiles(dbPath);
@@ -380,22 +292,12 @@ internal static class Program
         return startCode;
       }
 
-      ConsoleUi.WriteSuccess("NetM service restarted with a fresh database and in-memory counters.");
-      return 0;
-    }
-
-    if (restartDaemon)
-    {
-      var startCode = DaemonManager.Start();
-      if (startCode != 0)
-        return startCode;
-
-      ConsoleUi.WriteSuccess("Collector restarted with a fresh database and in-memory counters.");
+      ConsoleUi.WriteSuccess("Netvan service restarted with a fresh database and in-memory counters.");
       return 0;
     }
 #endif
 
-    ConsoleUi.WriteNote("Collector was not running; start it with netm start or netm service start when ready.");
+    ConsoleUi.WriteNote("Service was not running; start it with netvan service start when ready.");
     return 0;
   }
 
@@ -406,7 +308,7 @@ internal static class Program
     var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
 
 #if WINDOWS
-    if (Environment.GetEnvironmentVariable("NETM_DEBUG") == "1")
+    if (Environment.GetEnvironmentVariable("NETVAN_DEBUG") == "1")
       Native.IpHelperApi.PrintStatsDiagnostics();
 #endif
 
@@ -466,7 +368,7 @@ internal static class Program
   private static void RunRealtime(string dbPath)
   {
     dbPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(dbPath));
-    var refreshSeconds = Math.Max(1, NetmConfig.Load().SamplingIntervalSeconds);
+    var refreshSeconds = Math.Max(1, NetvanConfig.Load().SamplingIntervalSeconds);
     var refreshInterval = TimeSpan.FromSeconds(refreshSeconds);
 
     using var cts = new CancellationTokenSource();

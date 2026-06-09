@@ -200,7 +200,7 @@ internal static class IpHelperApi
         return new IPAddress(bytes);
     }
 
-    // Writes eStats API diagnostics to stdout (NETM_DEBUG=1).
+    // Writes eStats API diagnostics to stdout (NETVAN_DEBUG=1).
     public static void PrintStatsDiagnostics()
     {
         const uint established = 5;

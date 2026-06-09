@@ -17,6 +17,7 @@ class TrafficStore {
     }
     this.databasePath = databasePath;
     this.db = new Database(databasePath, { readonly: true, fileMustExist: true });
+    this.db.pragma('busy_timeout = 5000');
   }
 
   close() {

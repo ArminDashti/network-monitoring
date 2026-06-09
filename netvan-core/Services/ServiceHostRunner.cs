@@ -37,7 +37,7 @@ internal static class ServiceHostRunner
             return 1;
         }
 
-        var config = NetmConfig.Load().WithCollectionSettings(dbPath, intervalSeconds);
+        var config = NetvanConfig.Load().WithCollectionSettings(dbPath, intervalSeconds);
 
         var host = Host.CreateApplicationBuilder(args);
         host.Services.AddWindowsService(options => options.ServiceName = WindowsServiceManager.ServiceName);

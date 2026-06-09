@@ -1,11 +1,11 @@
 namespace Netvan.Storage;
 
-internal static class NetmLog
+internal static class NetvanLog
 {
     private static readonly object Gate = new();
-    private static NetmConfig? _config;
+    private static NetvanConfig? _config;
 
-    public static void Configure(NetmConfig config) => _config = config;
+    public static void Configure(NetvanConfig config) => _config = config;
 
     public static void Info(string message) => Write("Info", message);
 
@@ -17,7 +17,7 @@ internal static class NetmLog
 
     private static void Write(string level, string message)
     {
-        var config = _config ?? NetmConfig.Load();
+        var config = _config ?? NetvanConfig.Load();
         if (!ShouldLog(level, config.LogLevel))
             return;
 
@@ -26,7 +26,7 @@ internal static class NetmLog
 
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)) ?? NetmPaths.Home);
+            Directory.CreateDirectory(Path.GetDirectoryName(Path.GetFullPath(path)) ?? NetvanPaths.Home);
             lock (Gate)
                 File.AppendAllText(path, line);
         }

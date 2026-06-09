@@ -1,15 +1,15 @@
 {
-  "name": "netm-gui",
+  "name": "netvan-gui",
   "version": "1.0.0",
-  "description": "Modern Windows 11 GUI for NetM network monitor",
+  "description": "Modern Windows 11 GUI for Netvan network monitor",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "build": "electron-builder --win --x64",
+    "build": "electron-builder --win dir --x64",
     "postinstall": "electron-builder install-app-deps"
   },
-  "author": "NetM",
+  "author": "Netvan",
   "license": "MIT",
   "devDependencies": {
     "electron": "^35.0.0",
@@ -19,8 +19,8 @@
     "better-sqlite3": "^11.8.1"
   },
   "build": {
-    "appId": "com.netm.gui",
-    "productName": "NetM",
+    "appId": "com.netvan.gui",
+    "productName": "Netvan",
     "directories": {
       "output": "dist"
     },

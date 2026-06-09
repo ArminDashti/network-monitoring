@@ -18,8 +18,8 @@ internal sealed class TaskbarOverlayForm : Form
 
   public TaskbarOverlayForm()
   {
-    _databasePath = NetmConfig.Load().ResolvedDatabasePath;
-    var refreshSeconds = Math.Max(1, NetmConfig.Load().SamplingIntervalSeconds);
+    _databasePath = NetvanConfig.Load().ResolvedDatabasePath;
+    var refreshSeconds = Math.Max(1, NetvanConfig.Load().SamplingIntervalSeconds);
 
     _speedFont = new Font("Segoe UI", 8f, FontStyle.Regular, GraphicsUnit.Point);
 
@@ -30,7 +30,7 @@ internal sealed class TaskbarOverlayForm : Form
     BackColor = TransparentKey;
     TransparencyKey = TransparentKey;
     ClientSize = new Size(72, 36);
-    Text = "NetM";
+    Text = "Netvan";
 
     _refreshTimer = new System.Windows.Forms.Timer { Interval = refreshSeconds * 1000 };
     _refreshTimer.Tick += (_, _) => RefreshSpeeds();

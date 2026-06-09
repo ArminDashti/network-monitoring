@@ -5,22 +5,22 @@ namespace Netvan.Services;
 
 internal sealed class CollectionLoop : IDisposable
 {
-    private readonly NetmConfig _config;
+    private readonly NetvanConfig _config;
     private readonly TrafficStore _store;
     private readonly TrafficCollector _collector;
     private DateTime _lastMaintenanceUtc = DateTime.MinValue;
 
-    public CollectionLoop(NetmConfig config)
+    public CollectionLoop(NetvanConfig config)
     {
         _config = config;
         _store = new TrafficStore(config.ResolvedDatabasePath);
         _collector = new TrafficCollector(new NicResolver(), new HostNameCache());
-        NetmLog.Configure(config);
+        NetvanLog.Configure(config);
     }
 
     public async Task RunAsync(CancellationToken cancellationToken)
     {
-        NetmLog.Info($"Collector started (interval={_config.SamplingIntervalSeconds}s).");
+        NetvanLog.Info($"Collector started (interval={_config.SamplingIntervalSeconds}s).");
         var interval = TimeSpan.FromSeconds(_config.SamplingIntervalSeconds);
 
         while (!cancellationToken.IsCancellationRequested)
@@ -41,13 +41,13 @@ internal sealed class CollectionLoop : IDisposable
             }
             catch (Exception ex) when (!cancellationToken.IsCancellationRequested)
             {
-                NetmLog.Error($"Sample failed: {ex.Message}");
+                NetvanLog.Error($"Sample failed: {ex.Message}");
             }
 
             await Task.Delay(interval, cancellationToken);
         }
 
-        NetmLog.Info("Collector stopped.");
+        NetvanLog.Info("Collector stopped.");
     }
 
     private void MaybeRunMaintenance()
@@ -62,13 +62,13 @@ internal sealed class CollectionLoop : IDisposable
             var cutoff = now.AddDays(-_config.RetentionDays).ToString("O");
             var deleted = _store.PruneOlderThanUtc(cutoff);
             if (deleted > 0)
-                NetmLog.Info($"Pruned {deleted:N0} rows older than {_config.RetentionDays} days.");
+                NetvanLog.Info($"Pruned {deleted:N0} rows older than {_config.RetentionDays} days.");
 
             EnforceMaxDatabaseSize();
         }
         catch (Exception ex)
         {
-            NetmLog.Warning($"Maintenance failed: {ex.Message}");
+            NetvanLog.Warning($"Maintenance failed: {ex.Message}");
         }
     }
 
@@ -85,7 +85,7 @@ internal sealed class CollectionLoop : IDisposable
 
         var deleted = _store.PruneOldestFraction(0.10);
         _store.Vacuum();
-        NetmLog.Warning($"Database exceeded {_config.MaxSizeMb} MB; pruned ~{deleted:N0} oldest rows and vacuumed.");
+        NetvanLog.Warning($"Database exceeded {_config.MaxSizeMb} MB; pruned ~{deleted:N0} oldest rows and vacuumed.");
     }
 
     public void Dispose() => _store.Dispose();

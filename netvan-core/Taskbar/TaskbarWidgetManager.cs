@@ -9,7 +9,7 @@ internal readonly record struct TaskbarState(int ProcessId, DateTime StartedUtc)
 
 internal static class TaskbarWidgetManager
 {
-  private static string PidFile => Path.Combine(NetmPaths.Home, "taskbar.pid");
+  private static string PidFile => Path.Combine(NetvanPaths.Home, "taskbar.pid");
 
   public static int Enable()
   {
@@ -17,12 +17,12 @@ internal static class TaskbarWidgetManager
     ConsoleUi.WriteError("Taskbar widget requires a Windows build (net9.0-windows).");
     return 1;
 #else
-    Directory.CreateDirectory(NetmPaths.Home);
+    Directory.CreateDirectory(NetvanPaths.Home);
 
     var exe = Environment.ProcessPath;
     if (string.IsNullOrEmpty(exe) || !File.Exists(exe))
     {
-      ConsoleUi.WriteError("Could not resolve netm executable path.");
+      ConsoleUi.WriteError("Could not resolve netvan executable path.");
       return 1;
     }
 
@@ -90,7 +90,7 @@ internal static class TaskbarWidgetManager
 #if !WINDOWS
     return 1;
 #else
-    using var mutex = new Mutex(true, @"Global\NetM.TaskbarWidget", out var createdNew);
+    using var mutex = new Mutex(true, @"Global\Netvan.TaskbarWidget", out var createdNew);
     if (!createdNew)
       return 0;
 
@@ -121,7 +121,7 @@ internal static class TaskbarWidgetManager
     {
       FileName = exe,
       Arguments = "taskbar run",
-      WorkingDirectory = NetmPaths.Home,
+      WorkingDirectory = NetvanPaths.Home,
       CreateNoWindow = true,
       UseShellExecute = false,
     };

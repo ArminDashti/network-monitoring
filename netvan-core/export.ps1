@@ -12,6 +12,8 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+$NetvanServiceNames = @("Netvan", "NetM")
+
 # Resolve install directory: -InstallDir, -path, --path=<dir>, or ..\netvan
 $PathFromArgs = $null
 foreach ($arg in $args) {
@@ -54,15 +56,15 @@ function Test-IsAdministrator {
 function Test-InstallDirectoryInUse {
     param([string]$InstallDirectory)
 
-    $netmExe = Join-Path $InstallDirectory "netm.exe"
-    if ((Test-Path $netmExe) -and -not (Test-FileUnlocked -Path $netmExe)) {
+    $netvanExe = Join-Path $InstallDirectory "netvan.exe"
+    if ((Test-Path $netvanExe) -and -not (Test-FileUnlocked -Path $netvanExe)) {
         return $true
     }
 
     return $false
 }
 
-function Wait-NetMServiceStatus {
+function Wait-NetvanServiceStatus {
     param(
         [string]$ServiceName,
         [ValidateSet("Running", "Stopped")]
@@ -84,6 +86,135 @@ function Wait-NetMServiceStatus {
         Start-Sleep -Milliseconds 250
     }
 
+    return $false
+}
+
+function Get-NetvanWindowsServices {
+    $services = @()
+    foreach ($serviceName in $NetvanServiceNames) {
+        $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+        if ($service) {
+            $services += $service
+        }
+    }
+
+    return $services
+}
+
+function Test-NetvanServiceInstalled {
+    return (Get-NetvanWindowsServices).Count -gt 0
+}
+
+function Invoke-ScCommand {
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$ScArguments,
+        [string]$FailureContext
+    )
+
+    $output = & sc.exe @ScArguments 2>&1
+    $exitCode = $LASTEXITCODE
+    if ($exitCode -eq 0) {
+        return $true
+    }
+
+    $detail = ($output | Out-String).Trim()
+    $commandText = "sc.exe $($ScArguments -join ' ')"
+    if ($detail) {
+        Write-Host "[WARN] $commandText failed: $detail" -ForegroundColor Yellow
+    }
+    elseif ($FailureContext) {
+        Write-Host "[WARN] $FailureContext" -ForegroundColor Yellow
+    }
+
+    return $false
+}
+
+function Stop-NetvanWindowsService {
+    param(
+        [string]$InstallDirectory,
+        [switch]$FailIfNotStopped
+    )
+
+    $services = @(Get-NetvanWindowsServices)
+    if ($services.Count -eq 0) {
+        return $true
+    }
+
+    $netvanExe = Join-Path $InstallDirectory "netvan.exe"
+    if (Test-Path $netvanExe) {
+        & $netvanExe service stop 2>&1 | Out-Null
+    }
+
+    $allStopped = $true
+    foreach ($service in $services) {
+        $serviceName = $service.Name
+        Write-Info "Stopping '$serviceName' Windows service (Netvan)..."
+
+        Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
+        $null = Invoke-ScCommand -ScArguments @("stop", $serviceName) -FailureContext "Could not stop '$serviceName' via sc.exe."
+
+        if (Wait-NetvanServiceStatus -ServiceName $serviceName -DesiredStatus Stopped) {
+            Write-Success "Stopped '$serviceName' service."
+        }
+        else {
+            $allStopped = $false
+            if ($FailIfNotStopped) {
+                Write-Error-Exit "Could not stop '$serviceName'. Re-run export.ps1 in an elevated PowerShell window (Run as administrator)."
+            }
+
+            Write-Host "[WARN] '$serviceName' did not stop in time; files may stay locked." -ForegroundColor Yellow
+        }
+    }
+
+    return $allStopped
+}
+
+function Remove-NetvanWindowsServiceRegistration {
+    param(
+        [string]$InstallDirectory,
+        [switch]$FailIfPresent
+    )
+
+    if (-not (Test-NetvanServiceInstalled)) {
+        return $true
+    }
+
+    $netvanExe = Join-Path $InstallDirectory "netvan.exe"
+    if (Test-Path $netvanExe) {
+        & $netvanExe service uninstall 2>&1 | Out-Null
+    }
+
+    $maxAttempts = 5
+    for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
+        $services = @(Get-NetvanWindowsServices)
+        if ($services.Count -eq 0) {
+            Write-Success "Removed Netvan Windows service registration."
+            return $true
+        }
+
+        foreach ($service in $services) {
+            $serviceName = $service.Name
+            Write-Info "Removing existing '$serviceName' Windows service registration..."
+
+            $null = Invoke-ScCommand -ScArguments @("stop", $serviceName) -FailureContext "Could not stop '$serviceName' before delete."
+            Start-Sleep -Seconds 1
+            $null = Invoke-ScCommand -ScArguments @("delete", $serviceName) -FailureContext "Could not delete '$serviceName' service registration."
+        }
+
+        if (-not (Test-NetvanServiceInstalled)) {
+            Write-Success "Removed Netvan Windows service registration."
+            return $true
+        }
+
+        Start-Sleep -Seconds 1
+    }
+
+    if ($FailIfPresent) {
+        Write-Error-Exit "Could not remove Netvan Windows service registration. Re-run export.ps1 in an elevated PowerShell window (Run as administrator)."
+    }
+
+    Write-Host "[WARN] Could not remove Netvan Windows service registration. Re-run export.ps1 as Administrator." -ForegroundColor Yellow
     return $false
 }
 
@@ -126,22 +257,32 @@ function Wait-ForFileUnlocked {
     return $false
 }
 
-function Stop-NetmProcessesInDirectory {
+function Stop-NetvanProcessesInDirectory {
     param([string]$InstallDirectory)
 
+    $netvanExe = Join-Path $InstallDirectory "netvan.exe"
     $netmExe = Join-Path $InstallDirectory "netm.exe"
-    if (-not (Test-Path $netmExe)) {
+    $resolvedExe = $null
+
+    if (Test-Path $netvanExe) {
+        $resolvedExe = [System.IO.Path]::GetFullPath($netvanExe)
+        Write-Info "Stopping netvan processes using $resolvedExe..."
+        & $resolvedExe stop 2>$null | Out-Null
+        & $resolvedExe service stop 2>$null | Out-Null
+    }
+    elseif (Test-Path $netmExe) {
+        $resolvedExe = [System.IO.Path]::GetFullPath($netmExe)
+        Write-Info "Stopping legacy netm processes using $resolvedExe..."
+    }
+    else {
         return
     }
 
-    $resolvedExe = [System.IO.Path]::GetFullPath($netmExe)
-    Write-Info "Stopping netm processes using $resolvedExe..."
-
-    & $resolvedExe stop 2>$null | Out-Null
-    & $resolvedExe service stop 2>$null | Out-Null
-
     $stoppedAny = $false
-    $processes = @(Get-CimInstance Win32_Process -Filter "Name = 'netm.exe'" -ErrorAction SilentlyContinue)
+    $processes = @(
+        Get-CimInstance Win32_Process -Filter "Name = 'netvan.exe'" -ErrorAction SilentlyContinue
+        Get-CimInstance Win32_Process -Filter "Name = 'netm.exe'" -ErrorAction SilentlyContinue
+    )
     foreach ($proc in $processes) {
         $shouldStop = $false
 
@@ -159,13 +300,16 @@ function Stop-NetmProcessesInDirectory {
         }
 
         if ($shouldStop) {
-            Write-Info "Stopping netm.exe (PID $($proc.ProcessId))..."
+            Write-Info "Stopping netvan.exe (PID $($proc.ProcessId))..."
             Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
             $stoppedAny = $true
         }
     }
 
-    foreach ($proc in @(Get-Process -Name netm -ErrorAction SilentlyContinue)) {
+    foreach ($proc in @(
+            @(Get-Process -Name netvan -ErrorAction SilentlyContinue)
+            @(Get-Process -Name netm -ErrorAction SilentlyContinue)
+        )) {
         $procPath = $null
         try {
             $procPath = $proc.Path
@@ -177,7 +321,7 @@ function Stop-NetmProcessesInDirectory {
         if ($procPath) {
             try {
                 if ([System.IO.Path]::GetFullPath($procPath) -ieq $resolvedExe) {
-                    Write-Info "Stopping netm.exe (PID $($proc.Id))..."
+                    Write-Info "Stopping netvan.exe (PID $($proc.Id))..."
                     Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
                     $stoppedAny = $true
                 }
@@ -188,10 +332,10 @@ function Stop-NetmProcessesInDirectory {
         }
     }
 
-    if (-not $stoppedAny -and (Test-Path $netmExe) -and -not (Test-FileUnlocked -Path $netmExe)) {
-        $running = @(Get-Process -Name netm -ErrorAction SilentlyContinue)
+    if (-not $stoppedAny -and (Test-Path $netvanExe) -and -not (Test-FileUnlocked -Path $netvanExe)) {
+        $running = @(Get-Process -Name netvan -ErrorAction SilentlyContinue)
         if ($running.Count -gt 0) {
-            Write-Host "[WARN] Stopping $($running.Count) netm process(es) so install files can be replaced..." -ForegroundColor Yellow
+            Write-Host "[WARN] Stopping $($running.Count) netvan process(es) so install files can be replaced..." -ForegroundColor Yellow
             foreach ($proc in $running) {
                 Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
                 if (Test-IsAdministrator) {
@@ -215,15 +359,15 @@ function Assert-CanReplaceInstallDirectory {
         return
     }
 
-    $netmExe = Join-Path $InstallDirectory "netm.exe"
-    $service = Get-Service -Name "NetM" -ErrorAction SilentlyContinue
-    $runningCount = @(Get-Process -Name netm -ErrorAction SilentlyContinue).Count
+    $netvanExe = Join-Path $InstallDirectory "netvan.exe"
+    $services = @(Get-NetvanWindowsServices)
+    $runningCount = @(Get-Process -Name netvan -ErrorAction SilentlyContinue).Count
 
-    $reason = if ($service -and $service.Status -ne "Stopped") {
-        "The NetM Windows service is installed and must be stopped before export can replace files."
+    $reason = if ($services | Where-Object { $_.Status -ne "Stopped" }) {
+        "The Netvan Windows service is installed and must be stopped before export can replace files."
     }
     elseif ($runningCount -gt 0) {
-        "A netm.exe process (PID may require elevation to see) is still running and has $netmExe open."
+        "A netvan.exe process (PID may require elevation to see) is still running and has $netvanExe open."
     }
     else {
         "Install files in $InstallDirectory are locked."
@@ -232,52 +376,27 @@ function Assert-CanReplaceInstallDirectory {
     Write-Error-Exit "$reason Re-run export.ps1 in an elevated PowerShell window (Run as administrator)."
 }
 
-function Remove-NetMServiceIfPresent {
-    param([string]$InstallDirectory)
+function Remove-NetvanServiceIfPresent {
+    param(
+        [string]$InstallDirectory,
+        [switch]$FailIfServiceRemains
+    )
 
-    $serviceName = "NetM"
-    $netmExe = Join-Path $InstallDirectory "netm.exe"
-    $service = Get-Service -Name $serviceName -ErrorAction SilentlyContinue
+    $netvanExe = Join-Path $InstallDirectory "netvan.exe"
 
-    if ($service) {
-        if ($service.Status -notin @("Stopped", "StopPending")) {
-            Write-Info "Stopping '$serviceName' Windows service (Netvan)..."
-            if (Test-Path $netmExe) {
-                & $netmExe service stop 2>$null | Out-Null
-            }
-
-            Stop-Service -Name $serviceName -Force -ErrorAction SilentlyContinue
-            if (Wait-NetMServiceStatus -ServiceName $serviceName -DesiredStatus Stopped) {
-                Write-Success "Stopped '$serviceName' service."
-            }
-            else {
-                Write-Host "[WARN] '$serviceName' did not stop in time; files may stay locked." -ForegroundColor Yellow
-            }
-        }
-
-        Write-Info "Removing existing '$serviceName' Windows service registration..."
-        if (Test-Path $netmExe) {
-            & $netmExe service uninstall 2>$null | Out-Null
-        }
-
-        if (Get-Service -Name $serviceName -ErrorAction SilentlyContinue) {
-            $null = & sc.exe stop $serviceName 2>&1
-            Start-Sleep -Seconds 2
-            $null = & sc.exe delete $serviceName 2>&1
-        }
-
-        if (-not (Get-Service -Name $serviceName -ErrorAction SilentlyContinue)) {
-            Write-Success "Removed '$serviceName' service."
-        }
-        else {
-            Write-Host "[WARN] Could not remove '$serviceName' service. Re-run export.ps1 as Administrator." -ForegroundColor Yellow
-        }
+    if (Test-NetvanServiceInstalled) {
+        $null = Stop-NetvanWindowsService -InstallDirectory $InstallDirectory -FailIfNotStopped:$FailIfServiceRemains
+        $null = Remove-NetvanWindowsServiceRegistration -InstallDirectory $InstallDirectory -FailIfPresent:$FailIfServiceRemains
     }
 
-    Stop-NetmProcessesInDirectory -InstallDirectory $InstallDirectory
+    Stop-NetvanProcessesInDirectory -InstallDirectory $InstallDirectory
 
-    if ((Test-Path $netmExe) -and -not (Wait-ForFileUnlocked -Path $netmExe)) {
-        Write-Host "[WARN] $netmExe is still in use. Re-run export.ps1 as Administrator or stop NetM manually." -ForegroundColor Yellow
+    if ((Test-Path $netvanExe) -and -not (Wait-ForFileUnlocked -Path $netvanExe)) {
+        if ($FailIfServiceRemains) {
+            Write-Error-Exit "$netvanExe is still in use. Re-run export.ps1 in an elevated PowerShell window (Run as administrator)."
+        }
+
+        Write-Host "[WARN] $netvanExe is still in use. Re-run export.ps1 as Administrator or stop Netvan manually." -ForegroundColor Yellow
     }
 }
 
@@ -288,7 +407,7 @@ function Clear-InstallDirectory {
         return
     }
 
-    $netmExe = Join-Path $Dir "netm.exe"
+    $netvanExe = Join-Path $Dir "netvan.exe"
     $maxAttempts = 5
 
     Write-Info "Deleting all files in $Dir..."
@@ -305,9 +424,9 @@ function Clear-InstallDirectory {
             }
 
             Write-Host "[WARN] Could not delete all files (attempt $attempt/$maxAttempts): $($_.Exception.Message)" -ForegroundColor Yellow
-            Stop-NetmProcessesInDirectory -InstallDirectory $Dir
-            if (Test-Path $netmExe) {
-                $null = Wait-ForFileUnlocked -Path $netmExe -TimeoutSeconds 5
+            Stop-NetvanProcessesInDirectory -InstallDirectory $Dir
+            if (Test-Path $netvanExe) {
+                $null = Wait-ForFileUnlocked -Path $netvanExe -TimeoutSeconds 5
             }
 
             Start-Sleep -Seconds 1
@@ -328,13 +447,13 @@ function Update-InstallEnvironmentVariables {
         Write-Info "$Dir is already in PATH."
     }
 
-    [Environment]::SetEnvironmentVariable("NETM_HOME", $Dir, "User")
-    Write-Success "Set NETM_HOME environment variable to $Dir."
+    [Environment]::SetEnvironmentVariable("NETVAN_HOME", $Dir, "User")
+    Write-Success "Set NETVAN_HOME environment variable to $Dir."
 
     $env:Path = if ($env:Path -like "*$Dir*") { $env:Path } else { "$env:Path;$Dir" }
-    $env:NETM_HOME = $Dir
+    $env:NETVAN_HOME = $Dir
 
-    Write-Info "Restart your terminal for PATH/NETM_HOME to apply in new sessions."
+    Write-Info "Restart your terminal for PATH/NETVAN_HOME to apply in new sessions."
 }
 
 function Ensure-DefaultConfig {
@@ -355,8 +474,8 @@ function Ensure-DefaultConfig {
     $DefaultConfig = @"
 # Netvan Configuration
 
-# Database path (default: %LocalAppData%\NetM\traffic.db)
-database_path = "%NETM_HOME%\\traffic.db"
+# Database path (default: %LocalAppData%\Netvan\traffic.db)
+database_path = "%NETVAN_HOME%\\traffic.db"
 
 # Monitoring settings
 [monitoring]
@@ -377,7 +496,7 @@ retention_days = 30
 # Log level: Debug, Info, Warning, Error
 level = "Info"
 # Log file path
-log_file = "%NETM_HOME%\\netm.log"
+log_file = "%NETVAN_HOME%\\netvan.log"
 "@
     Set-Content -Path $ConfigPath -Value $DefaultConfig
     Write-Success "Created default configuration file at $ConfigPath"
@@ -438,6 +557,60 @@ function Ensure-SqliteCliAsset {
     }
 }
 
+function Install-NetvanGui {
+    param([string]$TargetDir)
+
+    $repoRoot = Split-Path $PSScriptRoot -Parent
+    $guiSource = Join-Path $repoRoot "netvan-gui"
+    if (-not (Test-Path $guiSource)) {
+        Write-Host "[WARN] netvan-gui not found at $guiSource; skipping GUI installation." -ForegroundColor Yellow
+        return
+    }
+
+    if (-not (Get-Command npm -ErrorAction SilentlyContinue)) {
+        Write-Host "[WARN] npm not found; skipping GUI installation. Install Node.js and re-run export.ps1 to include the GUI." -ForegroundColor Yellow
+        return
+    }
+
+    Write-Info "Building Netvan GUI (Electron)..."
+    $originalLocation = Get-Location
+    try {
+        Set-Location $guiSource
+
+        if (-not (Test-Path "node_modules")) {
+            Write-Info "Installing GUI dependencies..."
+            npm install
+            if ($LASTEXITCODE -ne 0) {
+                Write-Host "[WARN] npm install failed; skipping GUI installation." -ForegroundColor Yellow
+                return
+            }
+        }
+
+        npm run build
+        if ($LASTEXITCODE -ne 0) {
+            Write-Host "[WARN] GUI build failed; skipping GUI installation." -ForegroundColor Yellow
+            return
+        }
+    }
+    finally {
+        Set-Location $originalLocation
+    }
+
+    $unpackedDir = Join-Path $guiSource "dist" "win-unpacked"
+    if (-not (Test-Path $unpackedDir)) {
+        Write-Host "[WARN] GUI build output not found at $unpackedDir; skipping GUI installation." -ForegroundColor Yellow
+        return
+    }
+
+    $guiTarget = Join-Path $TargetDir "gui"
+    if (Test-Path $guiTarget) {
+        Remove-Item -Path $guiTarget -Recurse -Force
+    }
+
+    Copy-Item -Path $unpackedDir -Destination $guiTarget -Recurse -Force
+    Write-Success "GUI installed to $guiTarget"
+}
+
 function Install-SqliteCli {
     param(
         [string]$TargetDir,
@@ -459,16 +632,28 @@ $Arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
 Write-Info "Install directory: $InstallDir"
 Write-Info "Detected architecture: $Arch"
 
+$isAdmin = Test-IsAdministrator
 $hasExistingInstall = (Test-Path $InstallDir) -and ((Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0)
-if ($hasExistingInstall -and -not (Test-IsAdministrator)) {
-    $service = Get-Service -Name "NetM" -ErrorAction SilentlyContinue
-    $netmRunning = @(Get-Process -Name netm -ErrorAction SilentlyContinue).Count -gt 0
-    if (($service -and $service.Status -ne "Stopped") -or $netmRunning) {
-        Write-Error-Exit "An existing NetM install is running. Re-run export.ps1 in an elevated PowerShell window (Run as administrator) so netm.exe can be stopped and replaced."
+$serviceInstalled = Test-NetvanServiceInstalled
+
+if (-not $SkipService -and -not $isAdmin) {
+    Write-Error-Exit "Export installs and starts the Netvan Windows service by default. Re-run export.ps1 in an elevated PowerShell window (Run as administrator), or pass -SkipService to publish binaries only."
+}
+
+if (-not $isAdmin -and ($hasExistingInstall -or $serviceInstalled)) {
+    $runningServices = @(Get-NetvanWindowsServices | Where-Object { $_.Status -notin @("Stopped", "StopPending") })
+    $runningProcesses = @(
+        Get-Process -Name netvan -ErrorAction SilentlyContinue
+        Get-Process -Name netm -ErrorAction SilentlyContinue
+    ).Count -gt 0
+
+    if ($runningServices.Count -gt 0 -or $runningProcesses -or (Test-InstallDirectoryInUse -InstallDirectory $InstallDir)) {
+        Write-Error-Exit "An existing Netvan install or Windows service is still active. Re-run export.ps1 in an elevated PowerShell window (Run as administrator) so the service can be stopped, removed, and replaced."
     }
 }
 
-Remove-NetMServiceIfPresent -InstallDirectory $InstallDir
+$failIfServiceRemains = -not $SkipService
+Remove-NetvanServiceIfPresent -InstallDirectory $InstallDir -FailIfServiceRemains:$failIfServiceRemains
 Assert-CanReplaceInstallDirectory -InstallDirectory $InstallDir
 Clear-InstallDirectory -Dir $InstallDir
 
@@ -512,43 +697,48 @@ finally {
 
 Ensure-DefaultConfig -ConfigPath (Join-Path $InstallDir "configs.toml")
 Install-SqliteCli -TargetDir $InstallDir -Architecture $Arch
+Install-NetvanGui -TargetDir $InstallDir
 Update-InstallEnvironmentVariables -Dir $InstallDir
 
-$NetmExe = Join-Path $InstallDir "netm.exe"
+$NetvanExe = Join-Path $InstallDir "netvan.exe"
 $SqliteExe = Join-Path $InstallDir "sqlite3.exe"
 $ConfigFile = Join-Path $InstallDir "configs.toml"
 
 if (-not $SkipService) {
-    $isAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    if (-not $isAdmin) {
-        Write-Host "[WARN] Daemon mode requires an elevated PowerShell session." -ForegroundColor Yellow
-        Write-Host "[WARN] Re-run export.ps1 as Administrator, or run: netm service install && netm service start" -ForegroundColor Yellow
+    if (-not (Test-Path $NetvanExe)) {
+        Write-Error-Exit "Installation failed: netvan.exe not found at $NetvanExe"
     }
-    elseif (-not (Test-Path $NetmExe)) {
-        Write-Error-Exit "Installation failed: netm.exe not found at $NetmExe"
-    }
-    else {
-        $DbPath = Join-Path $InstallDir "traffic.db"
-        Write-Info "Installing NetM Windows service (daemon mode, interval ${ServiceInterval}s)..."
-        & $NetmExe service install --db $DbPath --interval $ServiceInterval
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error-Exit "netm service install failed with exit code $LASTEXITCODE"
-        }
 
-        Write-Info "Starting NetM Windows service..."
-        & $NetmExe service start
-        if ($LASTEXITCODE -ne 0) {
-            Write-Error-Exit "netm service start failed with exit code $LASTEXITCODE"
-        }
-
-        Write-Success "NetM Windows service installed and started (daemon mode)."
+    if (Test-NetvanServiceInstalled) {
+        Write-Info "Existing Netvan service registration detected after publish; removing before reinstall..."
+        $null = Stop-NetvanWindowsService -InstallDirectory $InstallDir -FailIfNotStopped
+        $null = Remove-NetvanWindowsServiceRegistration -InstallDirectory $InstallDir -FailIfPresent
     }
+
+    $DbPath = Join-Path $InstallDir "traffic.db"
+    Write-Info "Installing Netvan Windows service (interval ${ServiceInterval}s)..."
+    & $NetvanExe service install --db $DbPath --interval $ServiceInterval
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error-Exit "netvan service install failed with exit code $LASTEXITCODE"
+    }
+
+    Write-Info "Starting Netvan Windows service..."
+    & $NetvanExe service start
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error-Exit "netvan service start failed with exit code $LASTEXITCODE"
+    }
+
+    Write-Success "Netvan Windows service installed and started."
 }
 
-if (Test-Path $NetmExe) {
+if (Test-Path $NetvanExe) {
     Write-Success "Installation complete! Files installed to: $InstallDir"
     Write-Info "Installed files:"
-    Write-Info "  - netm.exe (Netvan CLI)"
+    Write-Info "  - netvan.exe (launches GUI when run with no arguments; CLI with subcommands)"
+    $guiExe = Join-Path $InstallDir "gui\Netvan.exe"
+    if (Test-Path $guiExe) {
+        Write-Info "  - gui\Netvan.exe (Electron GUI)"
+    }
     if (Test-Path $SqliteExe) {
         Write-Info "  - sqlite3.exe (SQLite CLI tool)"
     }
@@ -556,11 +746,10 @@ if (Test-Path $NetmExe) {
         Write-Info "  - configs.toml (Configuration file)"
     }
     Write-Info ""
-    Write-Info "Run 'netm info' to verify the installation"
-    Write-Info "Daemon mode: export.ps1 installs the Windows service by default (elevated). Use -SkipService to install binaries only."
-    Write-Info "Optional local mode: run 'netm start' then 'netm status' if you prefer non-service collection."
+    Write-Info "Run 'netvan info' to verify the installation"
+    Write-Info "export.ps1 installs the Windows service by default (elevated). Use -SkipService to install binaries only."
     Write-Info "Use 'sqlite3.exe' to manage the SQLite database directly"
 }
 else {
-    Write-Error-Exit "Installation failed: netm.exe not found at $NetmExe"
+    Write-Error-Exit "Installation failed: netvan.exe not found at $NetvanExe"
 }

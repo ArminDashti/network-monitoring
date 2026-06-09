@@ -64,9 +64,10 @@ async function init() {
   bindUsageQuery();
   bindServiceControls();
   bindAppsFilter();
+  bindSettingsControls();
 
   try {
-    config = await window.netmApi.getConfig();
+    config = await window.netvanApi.getConfig();
   } catch {
     config = { samplingInterval: 1 };
   }
@@ -78,9 +79,9 @@ async function init() {
 }
 
 function bindWindowControls() {
-  document.getElementById('btn-minimize').addEventListener('click', () => window.netmApi.minimize());
-  document.getElementById('btn-maximize').addEventListener('click', () => window.netmApi.maximize());
-  document.getElementById('btn-close').addEventListener('click', () => window.netmApi.close());
+  document.getElementById('btn-minimize').addEventListener('click', () => window.netvanApi.minimize());
+  document.getElementById('btn-maximize').addEventListener('click', () => window.netvanApi.maximize());
+  document.getElementById('btn-close').addEventListener('click', () => window.netvanApi.close());
 }
 
 function bindNavigation() {
@@ -97,6 +98,7 @@ function bindNavigation() {
       currentView = view;
 
       if (view === 'service') await refreshServiceStatus();
+      if (view === 'settings') await loadSettings();
       if (view === 'about') await loadAbout();
       if (view === 'apps') await loadApps(document.getElementById('apps-filter').value);
     });
@@ -114,7 +116,7 @@ async function refreshLive() {
   const tbody = document.getElementById('live-tbody');
 
   try {
-    const data = await window.netmApi.getRealtime(true);
+    const data = await window.netvanApi.getRealtime(true);
 
     if (data.error) {
       statusEl.classList.add('error');
@@ -141,7 +143,7 @@ async function refreshLive() {
     `;
 
     if (!data.rows.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No traffic recorded yet. Ensure the NetM service is running.</td></tr>';
+      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No traffic recorded yet. Ensure the Netvan service is running.</td></tr>';
       return;
     }
 
@@ -176,7 +178,7 @@ async function runUsageQuery() {
   resultsEl.innerHTML = '<p class="empty-state">Querying…</p>';
 
   try {
-    const data = await window.netmApi.getUsage({ fromRaw, toRaw, target, includePrivate });
+    const data = await window.netvanApi.getUsage({ fromRaw, toRaw, target, includePrivate });
 
     if (data.error) {
       resultsEl.innerHTML = `<div class="error-banner">${escapeHtml(data.error)}</div>`;
@@ -259,7 +261,7 @@ async function loadApps(filter) {
   grid.innerHTML = '<p class="empty-state">Loading…</p>';
 
   try {
-    const data = await window.netmApi.listApps(filter || null);
+    const data = await window.netvanApi.listApps(filter || null);
     if (data.error) {
       grid.innerHTML = `<div class="error-banner">${escapeHtml(data.error)}</div>`;
       return;
@@ -280,36 +282,79 @@ async function loadApps(filter) {
 
 function bindServiceControls() {
   document.getElementById('service-refresh').addEventListener('click', refreshServiceStatus);
-  document.getElementById('service-start').addEventListener('click', async () => {
-    const result = await window.netmApi.startService();
-    showToast(result.ok ? 'Service start requested' : stripAnsi(result.stderr || result.stdout), !result.ok);
+
+  bindControlAction('service-start', 'Service start', () => window.netvanApi.startService());
+  bindControlAction('service-stop', 'Service stop', () => window.netvanApi.stopService());
+  bindControlAction('service-restart', 'Service restart', () => window.netvanApi.restartService());
+
+  document.getElementById('data-reset').addEventListener('click', async () => {
+    const confirmed = window.confirm(
+      'Delete all traffic data and restart the Windows service if it is running?\n\nThis cannot be undone.'
+    );
+    if (!confirmed) return;
+
+    const result = await window.netvanApi.resetData();
+    const message = stripAnsi(result.stderr || result.stdout)
+      || (result.ok ? 'Database reset complete' : 'Reset failed');
+    showToast(message, !result.ok);
     await refreshServiceStatus();
+    if (currentView === 'live') await refreshLive();
+    if (currentView === 'about') await loadAbout();
   });
-  document.getElementById('service-stop').addEventListener('click', async () => {
-    const result = await window.netmApi.stopService();
-    showToast(result.ok ? 'Service stop requested' : stripAnsi(result.stderr || result.stdout), !result.ok);
+}
+
+async function bindControlAction(elementId, label, action) {
+  document.getElementById(elementId).addEventListener('click', async () => {
+    const result = await action();
+    const message = stripAnsi(result.stderr || result.stdout)
+      || (result.ok ? `${label} requested` : `${label} failed`);
+    showToast(message, !result.ok);
     await refreshServiceStatus();
+    if (currentView === 'live') await refreshLive();
   });
 }
 
 async function refreshServiceStatus() {
   const serviceEl = document.getElementById('service-output');
-  const collectorEl = document.getElementById('collector-output');
 
   serviceEl.textContent = 'Loading…';
-  collectorEl.textContent = 'Loading…';
 
-  const [service, collector] = await Promise.all([
-    window.netmApi.getServiceStatus(),
-    window.netmApi.getCollectorStatus(),
-  ]);
+  const service = await window.netvanApi.getServiceStatus();
 
   serviceEl.textContent = stripAnsi(
     service.stdout || service.stderr || (service.ok ? 'OK' : 'Failed to get service status')
   );
-  collectorEl.textContent = stripAnsi(
-    collector.stdout || collector.stderr || (collector.ok ? 'OK' : 'Failed to get collector status')
-  );
+}
+
+function bindSettingsControls() {
+  const controls = [
+    { id: 'setting-launch-startup', key: 'launchAtStartup' },
+    { id: 'setting-close-tray', key: 'closeToTray' },
+    { id: 'setting-notifications', key: 'notificationsEnabled' },
+  ];
+
+  controls.forEach(({ id, key }) => {
+    document.getElementById(id).addEventListener('change', async (event) => {
+      try {
+        await window.netvanApi.setSettings({ [key]: event.target.checked });
+        showToast('Settings saved');
+      } catch (err) {
+        showToast(err.message, true);
+        await loadSettings();
+      }
+    });
+  });
+}
+
+async function loadSettings() {
+  try {
+    const settings = await window.netvanApi.getSettings();
+    document.getElementById('setting-launch-startup').checked = settings.launchAtStartup;
+    document.getElementById('setting-close-tray').checked = settings.closeToTray;
+    document.getElementById('setting-notifications').checked = settings.notificationsEnabled;
+  } catch (err) {
+    showToast(err.message, true);
+  }
 }
 
 async function loadAbout() {
@@ -317,8 +362,8 @@ async function loadAbout() {
 
   try {
     const [cfg, info] = await Promise.all([
-      window.netmApi.getConfig(),
-      window.netmApi.getDatabaseInfo(),
+      window.netvanApi.getConfig(),
+      window.netvanApi.getDatabaseInfo(),
     ]);
 
     if (info.error) {

@@ -2,15 +2,56 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
+function legacyHome() {
+  return path.join(
+    process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'),
+    'Netvan',
+  );
+}
+
+/**
+ * Mirrors netvan-core Storage.NetvanPaths.Home so GUI and CLI use the same data directory.
+ */
 function resolveHome() {
-  return process.env.NETM_HOME
-    || path.join(process.env.LOCALAPPDATA || path.join(os.homedir(), 'AppData', 'Local'), 'NetM');
+  const fromEnv = process.env.NETVAN_HOME;
+  if (fromEnv && fromEnv.trim()) {
+    return path.resolve(fromEnv.trim());
+  }
+
+  const execDir = path.dirname(process.execPath);
+  const execBase = path.basename(execDir).toLowerCase();
+
+  // Packaged GUI lives in <install>/gui/Netvan.exe; data files are in <install>/.
+  if (execBase === 'gui') {
+    return path.resolve(path.dirname(execDir));
+  }
+
+  // netvan.exe and configs.toml live in the install directory.
+  if (fs.existsSync(path.join(execDir, 'netvan.exe'))) {
+    return execDir;
+  }
+
+  const guiRoot = path.resolve(__dirname, '..', '..');
+  const devInstallCandidates = [
+    path.join(guiRoot, '..', 'netvan'),
+    path.join(guiRoot, '..', 'Netvan'),
+    path.join(process.cwd(), '..', 'netvan'),
+    path.join(process.cwd(), '..', 'Netvan'),
+  ];
+  for (const candidate of devInstallCandidates) {
+    const resolved = path.resolve(candidate);
+    if (fs.existsSync(path.join(resolved, 'netvan.exe'))) {
+      return resolved;
+    }
+  }
+
+  return legacyHome();
 }
 
 function expandPath(value, home) {
   return value
-    .replace(/%NETM_HOME%/gi, home)
-    .replace(/\$NETM_HOME/gi, home);
+    .replace(/%NETVAN_HOME%/gi, home)
+    .replace(/\$NETVAN_HOME/gi, home);
 }
 
 function parseTomlValue(raw) {
@@ -30,7 +71,7 @@ function loadConfig(home = resolveHome()) {
     retentionDays: 30,
     maxSizeMb: 500,
     logLevel: 'Info',
-    logFile: path.join(home, 'netm.log'),
+    logFile: path.join(home, 'netvan.log'),
   };
 
   if (!fs.existsSync(configPath)) {

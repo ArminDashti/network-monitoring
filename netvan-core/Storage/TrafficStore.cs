@@ -21,7 +21,15 @@ internal sealed class TrafficStore : IDisposable
 
         _connection = new SqliteConnection(cs);
         _connection.Open();
+        EnableConcurrentReads();
         InitSchema();
+    }
+
+    private void EnableConcurrentReads()
+    {
+        using var cmd = _connection.CreateCommand();
+        cmd.CommandText = "PRAGMA journal_mode=WAL; PRAGMA busy_timeout=5000;";
+        cmd.ExecuteNonQuery();
     }
 
     private void InitSchema()

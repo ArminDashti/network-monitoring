@@ -10,7 +10,7 @@ namespace Netvan.Services;
 /// </summary>
 internal static class FirewallBlockService
 {
-    private const string RuleNamePrefix = "netm-block";
+    private const string RuleNamePrefix = "netvan-block";
 
     /// <summary>
     /// Blocks outbound traffic to the given remote IP (IPv4 or IPv6).

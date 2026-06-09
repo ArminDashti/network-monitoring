@@ -16,13 +16,13 @@ internal sealed class CollectorHostedService : BackgroundService
 
 {
 
-    private readonly NetmConfig _config;
+    private readonly NetvanConfig _config;
 
     private readonly ILogger<CollectorHostedService> _logger;
 
 
 
-    public CollectorHostedService(NetmConfig config, ILogger<CollectorHostedService> logger)
+    public CollectorHostedService(NetvanConfig config, ILogger<CollectorHostedService> logger)
 
     {
 
@@ -40,7 +40,7 @@ internal sealed class CollectorHostedService : BackgroundService
 
         _logger.LogInformation(
 
-            "NetM collector started. Database={DatabasePath}, interval={IntervalSeconds}s",
+            "Netvan collector started. Database={DatabasePath}, interval={IntervalSeconds}s",
 
             _config.ResolvedDatabasePath,
 
@@ -62,7 +62,7 @@ internal sealed class CollectorHostedService : BackgroundService
 
         {
 
-            _logger.LogInformation("NetM collector stopped.");
+            _logger.LogInformation("Netvan collector stopped.");
 
         }
 
@@ -70,7 +70,7 @@ internal sealed class CollectorHostedService : BackgroundService
 
         {
 
-            _logger.LogError(ex, "NetM collector failed.");
+            _logger.LogError(ex, "Netvan collector failed.");
 
             throw;
 
