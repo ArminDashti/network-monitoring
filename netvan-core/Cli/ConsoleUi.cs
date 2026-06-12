@@ -57,9 +57,9 @@ internal static class ConsoleUi
       new("File size", ByteFormatter.FormatBytes(info.FileBytes)),
       new("Rows", info.RowCount.ToString("N0")),
       new("Apps", info.DistinctAppCount.ToString("N0")),
-      new("First UTC", info.FirstMinuteUtc ?? "(none)"),
-      new("Last UTC", info.LastMinuteUtc ?? "(none)"),
-      new("Datetime", $"local {datetimeFormat} (date-only yyMMdd → T0000)"),
+      new("First", CompactDateTime.FormatUtcAsLocal(info.FirstMinuteUtc)),
+      new("Last", CompactDateTime.FormatUtcAsLocal(info.LastMinuteUtc)),
+      new("Datetime input", $"{datetimeFormat} local (date-only yyMMdd → T0000)"),
     ]);
   }
 
@@ -92,7 +92,7 @@ internal static class ConsoleUi
     RenderSectionHeader("Query");
     RenderKeyValues(
     [
-      new("Range (UTC)", $"{fromUtc} .. {toUtc} [grey](inclusive)[/]", ValueIsMarkup: true),
+      new("Range", $"{CompactDateTime.FormatUtcAsLocal(fromUtc)} .. {CompactDateTime.FormatUtcAsLocal(toUtc)} [grey](inclusive, local)[/]", ValueIsMarkup: true),
       new("Target", targetLabel),
       new("Private IPs", includePrivate ? "[green]included[/]" : "[grey]excluded[/]", ValueIsMarkup: true),
     ]);

@@ -39,7 +39,7 @@ Only these subcommands are exposed:
 |---------|---------|
 | `netvan service` | Install/start/stop the Netvan Windows service (required for collection) |
 | `netvan reset` | Remove the traffic database and restart the service (fresh in-memory counters) |
-| `netvan info` | Database path, row counts, UTC coverage, version |
+| `netvan info` | Database path, row counts, time coverage, version |
 | `netvan usage` | Upload, download, and total bytes in a time range |
 | `netvan apps list` | Application names seen in the database |
 | `netvan rt` | Real-time usage table by app |

@@ -69,6 +69,7 @@
               <p class="subtitle">Real-time per-application network usage</p>
             </div>
             <div class="header-actions">
+              <span class="header-updated" id="live-updated"></span>
               <span class="status-pill" id="live-status">
                 <span class="status-dot"></span>
                 Updating…
@@ -87,28 +88,19 @@
               <div class="speed-value" id="live-upload">—</div>
               <div class="speed-sub">Current second</div>
             </div>
-            <div class="speed-card total">
-              <div class="speed-label">Combined</div>
-              <div class="speed-value" id="live-total">—</div>
-              <div class="speed-sub" id="live-updated">—</div>
-            </div>
           </div>
 
           <div class="card">
-            <div class="card-header">
-              <h2>Applications</h2>
-              <div class="range-badges" id="live-ranges"></div>
-            </div>
             <div class="table-wrap">
               <table class="data-table" id="live-table">
                 <thead>
                   <tr>
-                    <th>Application</th>
-                    <th class="num">Download</th>
-                    <th class="num">Upload</th>
-                    <th class="num">Daily ↓/↑</th>
-                    <th class="num">Weekly ↓/↑</th>
-                    <th class="num">Monthly ↓/↑</th>
+                    <th class="sortable" data-sort="appName">Application</th>
+                    <th class="num sortable sorted-desc" data-sort="currentDownBytes">Download</th>
+                    <th class="num sortable" data-sort="currentUpBytes">Upload</th>
+                    <th class="num sortable" data-sort="dailyDownBytes">Daily ↓/↑</th>
+                    <th class="num sortable" data-sort="weeklyDownBytes">Weekly ↓/↑</th>
+                    <th class="num sortable" data-sort="monthlyDownBytes">Monthly ↓/↑</th>
                   </tr>
                 </thead>
                 <tbody id="live-tbody">

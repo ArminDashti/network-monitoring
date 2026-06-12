@@ -5,6 +5,7 @@ namespace Netvan.Cli;
 internal static class CompactDateTime
 {
   public const string Format = "yyMMdd'T'HHmm";
+  public const string LocalDisplayFormat = "yyyy-MM-dd HH:mm:ss";
 
   public static string NormalizeInput(string raw)
   {
@@ -47,5 +48,16 @@ internal static class CompactDateTime
       (fromLocal, toLocal) = (toLocal, fromLocal);
 
     return (fromLocal.ToUniversalTime().ToString("O"), toLocal.ToUniversalTime().ToString("O"));
+  }
+
+  public static string FormatUtcAsLocal(string? utcIso)
+  {
+    if (string.IsNullOrWhiteSpace(utcIso))
+      return "(none)";
+
+    if (!DateTimeOffset.TryParse(utcIso, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var parsed))
+      return utcIso;
+
+    return parsed.ToLocalTime().ToString(LocalDisplayFormat);
   }
 }

@@ -276,7 +276,7 @@ body {
 /* Speed cards */
 .speed-cards {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 16px;
   margin-bottom: 20px;
 }
@@ -345,10 +345,37 @@ body {
   white-space: nowrap;
 }
 
-.data-table th.num,
 .data-table td.num {
   text-align: right;
   font-variant-numeric: tabular-nums;
+}
+
+#live-table th {
+  text-align: center;
+}
+
+#live-table th.sortable {
+  cursor: pointer;
+  user-select: none;
+}
+
+#live-table th.sortable:hover {
+  color: var(--text-primary);
+}
+
+#live-table th.sortable.sorted-asc::after {
+  content: ' \25B2';
+  font-size: 9px;
+}
+
+#live-table th.sortable.sorted-desc::after {
+  content: ' \25BC';
+  font-size: 9px;
+}
+
+.header-updated {
+  font-size: 12px;
+  color: var(--text-muted);
 }
 
 .data-table td {
@@ -406,21 +433,6 @@ body {
 @keyframes pulse {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.4; }
-}
-
-.range-badges {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.badge {
-  padding: 4px 10px;
-  border-radius: 999px;
-  font-size: 11px;
-  background: rgba(255, 255, 255, 0.06);
-  color: var(--text-muted);
-  border: 1px solid var(--border-subtle);
 }
 
 /* Filters */

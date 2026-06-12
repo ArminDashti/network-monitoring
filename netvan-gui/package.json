@@ -6,7 +6,7 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron . --dev",
-    "build": "electron-builder --win dir --x64",
+    "build": "electron-builder --win dir --x64 --config.directories.output=dist-build",
     "postinstall": "electron-builder install-app-deps"
   },
   "author": "Netvan",
@@ -22,14 +22,15 @@
     "appId": "com.netvan.gui",
     "productName": "Netvan",
     "directories": {
-      "output": "dist"
+      "output": "dist-build"
     },
     "win": {
       "target": "nsis"
     },
     "files": [
       "**/*",
-      "!dist/**"
+      "!dist/**",
+      "!dist-build/**"
     ]
   }
 }

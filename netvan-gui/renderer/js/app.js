@@ -9,14 +9,6 @@ function formatBytes(value) {
   return `${(n / (K * K * K * K)).toFixed(2)} TB`;
 }
 
-function formatMegabytes(bytes) {
-  return `${(Math.max(0, bytes) / (K * K)).toFixed(2)} MB`;
-}
-
-function formatGigabytes(bytes) {
-  return `${(Math.max(0, bytes) / (K * K * K)).toFixed(2)} GB`;
-}
-
 function formatSpeed(bytesPerSecond) {
   const mbps = (Math.max(0, bytesPerSecond) * 8) / (K * K);
   if (mbps >= 1000) return `${(mbps / 1000).toFixed(1)} Gb/s`;
@@ -25,8 +17,24 @@ function formatSpeed(bytesPerSecond) {
   return `${kbps.toFixed(0)} Kb/s`;
 }
 
+const PERIOD_MB_PRECISION_THRESHOLD = 100;
+
+function formatPeriodBytes(bytes) {
+  const n = Math.max(0, Number(bytes) || 0);
+  const mb = n / (K * K);
+  if (mb < K) {
+    return mb < PERIOD_MB_PRECISION_THRESHOLD
+      ? `${mb.toFixed(2)} MB`
+      : `${mb.toFixed(1)} MB`;
+  }
+  const gb = mb / K;
+  return gb < PERIOD_MB_PRECISION_THRESHOLD
+    ? `${gb.toFixed(2)} GB`
+    : `${gb.toFixed(1)} GB`;
+}
+
 function formatDownUpPair(downBytes, upBytes) {
-  return `${formatGigabytes(downBytes)} / ${formatGigabytes(upBytes)}`;
+  return `<span class="val-down">${formatPeriodBytes(downBytes)}</span> / <span class="val-up">${formatPeriodBytes(upBytes)}</span>`;
 }
 
 function formatLocal(iso) {
@@ -57,6 +65,8 @@ function stripAnsi(text) {
 let config = null;
 let liveTimer = null;
 let currentView = 'live';
+let liveRows = [];
+let liveSort = { column: 'currentDownBytes', dir: 'desc' };
 
 async function init() {
   bindWindowControls();
@@ -65,6 +75,7 @@ async function init() {
   bindServiceControls();
   bindAppsFilter();
   bindSettingsControls();
+  bindLiveTableSort();
 
   try {
     config = await window.netvanApi.getConfig();
@@ -111,6 +122,59 @@ function startLivePolling() {
   liveTimer = setInterval(refreshLive, intervalMs);
 }
 
+function bindLiveTableSort() {
+  document.querySelectorAll('#live-table th.sortable').forEach((th) => {
+    th.addEventListener('click', () => {
+      const column = th.dataset.sort;
+      if (liveSort.column === column) {
+        liveSort.dir = liveSort.dir === 'asc' ? 'desc' : 'asc';
+      } else {
+        liveSort = { column, dir: 'desc' };
+      }
+      updateLiveSortHeaders();
+      renderLiveTable();
+    });
+  });
+}
+
+function updateLiveSortHeaders() {
+  document.querySelectorAll('#live-table th.sortable').forEach((th) => {
+    th.classList.remove('sorted-asc', 'sorted-desc');
+    if (th.dataset.sort === liveSort.column) {
+      th.classList.add(liveSort.dir === 'asc' ? 'sorted-asc' : 'sorted-desc');
+    }
+  });
+}
+
+function compareLiveRows(a, b) {
+  const { column, dir } = liveSort;
+  const mul = dir === 'asc' ? 1 : -1;
+  if (column === 'appName') {
+    return mul * a.appName.localeCompare(b.appName, undefined, { sensitivity: 'base' });
+  }
+  return mul * ((a[column] || 0) - (b[column] || 0));
+}
+
+function renderLiveTable() {
+  const tbody = document.getElementById('live-tbody');
+  if (!liveRows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No traffic recorded yet. Ensure the Netvan service is running.</td></tr>';
+    return;
+  }
+
+  const sorted = [...liveRows].sort(compareLiveRows);
+  tbody.innerHTML = sorted.map((row) => `
+    <tr>
+      <td><span class="app-name">${escapeHtml(row.appName)}</span></td>
+      <td class="num val-down">${formatSpeed(row.currentDownBytes)}</td>
+      <td class="num val-up">${formatSpeed(row.currentUpBytes)}</td>
+      <td class="num">${formatDownUpPair(row.dailyDownBytes, row.dailyUpBytes)}</td>
+      <td class="num">${formatDownUpPair(row.weeklyDownBytes, row.weeklyUpBytes)}</td>
+      <td class="num">${formatDownUpPair(row.monthlyDownBytes, row.monthlyUpBytes)}</td>
+    </tr>
+  `).join('');
+}
+
 async function refreshLive() {
   const statusEl = document.getElementById('live-status');
   const tbody = document.getElementById('live-tbody');
@@ -124,7 +188,7 @@ async function refreshLive() {
       tbody.innerHTML = `<tr><td colspan="6" class="empty-state">${escapeHtml(data.error)}</td></tr>`;
       document.getElementById('live-download').textContent = '—';
       document.getElementById('live-upload').textContent = '—';
-      document.getElementById('live-total').textContent = '—';
+      document.getElementById('live-updated').textContent = '';
       return;
     }
 
@@ -133,30 +197,10 @@ async function refreshLive() {
 
     document.getElementById('live-download').textContent = formatSpeed(data.totalDownBytes);
     document.getElementById('live-upload').textContent = formatSpeed(data.totalUpBytes);
-    document.getElementById('live-total').textContent = formatSpeed(data.totalDownBytes + data.totalUpBytes);
     document.getElementById('live-updated').textContent = `Updated ${formatLocalShort(data.nowLocal)}`;
 
-    document.getElementById('live-ranges').innerHTML = `
-      <span class="badge">Daily: ${formatLocalShort(data.dailyStartLocal)}</span>
-      <span class="badge">Weekly: ${formatLocalShort(data.weeklyStartLocal)}</span>
-      <span class="badge">Monthly: ${formatLocalShort(data.monthlyStartLocal)}</span>
-    `;
-
-    if (!data.rows.length) {
-      tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No traffic recorded yet. Ensure the Netvan service is running.</td></tr>';
-      return;
-    }
-
-    tbody.innerHTML = data.rows.map((row) => `
-      <tr>
-        <td><span class="app-name">${escapeHtml(row.appName)}</span></td>
-        <td class="num val-down">${formatMegabytes(row.currentDownBytes)}</td>
-        <td class="num val-up">${formatMegabytes(row.currentUpBytes)}</td>
-        <td class="num">${formatDownUpPair(row.dailyDownBytes, row.dailyUpBytes)}</td>
-        <td class="num">${formatDownUpPair(row.weeklyDownBytes, row.weeklyUpBytes)}</td>
-        <td class="num">${formatDownUpPair(row.monthlyDownBytes, row.monthlyUpBytes)}</td>
-      </tr>
-    `).join('');
+    liveRows = data.rows;
+    renderLiveTable();
   } catch (err) {
     statusEl.classList.add('error');
     statusEl.innerHTML = '<span class="status-dot"></span> Error';
@@ -185,7 +229,7 @@ async function runUsageQuery() {
       return;
     }
 
-    const rangeNote = `<p class="empty-state" style="padding-top:0">Range (UTC): ${escapeHtml(data.fromUtc)} → ${escapeHtml(data.toUtc)}</p>`;
+    const rangeNote = `<p class="empty-state" style="padding-top:0">Range: ${escapeHtml(formatLocal(data.fromUtc))} → ${escapeHtml(formatLocal(data.toUtc))}</p>`;
 
     if (data.kind === 'totals') {
       const t = data.totals;
@@ -378,8 +422,8 @@ async function loadAbout() {
       ['File size', formatBytes(info.fileBytes)],
       ['Rows', info.rowCount.toLocaleString()],
       ['Applications', info.distinctAppCount.toLocaleString()],
-      ['First UTC', info.firstMinuteUtc || '(none)'],
-      ['Last UTC', info.lastMinuteUtc || '(none)'],
+      ['First', formatLocal(info.firstMinuteUtc)],
+      ['Last', formatLocal(info.lastMinuteUtc)],
       ['Sampling interval', `${cfg.samplingInterval}s`],
       ['Retention', `${cfg.retentionDays} days`],
       ['Max DB size', `${cfg.maxSizeMb} MB`],

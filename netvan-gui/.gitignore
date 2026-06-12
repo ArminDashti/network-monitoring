@@ -1,6 +1,7 @@
 # Netvan GUI dependencies
 node_modules/
 dist/
+dist-build/
 
 # Native build artifacts
 *.node

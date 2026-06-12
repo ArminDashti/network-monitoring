@@ -391,6 +391,12 @@ function Remove-NetvanServiceIfPresent {
 
     Stop-NetvanProcessesInDirectory -InstallDirectory $InstallDirectory
 
+    $repoRoot = Split-Path $PSScriptRoot -Parent
+    $guiSource = Join-Path $repoRoot "netvan-gui"
+    if (Test-Path $guiSource) {
+        Stop-NetvanGuiProcesses -InstallDirectory $InstallDirectory -GuiSourceDirectory $guiSource
+    }
+
     if ((Test-Path $netvanExe) -and -not (Wait-ForFileUnlocked -Path $netvanExe)) {
         if ($FailIfServiceRemains) {
             Write-Error-Exit "$netvanExe is still in use. Re-run export.ps1 in an elevated PowerShell window (Run as administrator)."
@@ -557,6 +563,143 @@ function Ensure-SqliteCliAsset {
     }
 }
 
+function Test-ProcessPathUnderDirectory {
+    param(
+        [string]$ProcessPath,
+        [string]$DirectoryPath
+    )
+
+    if ([string]::IsNullOrWhiteSpace($ProcessPath) -or [string]::IsNullOrWhiteSpace($DirectoryPath)) {
+        return $false
+    }
+
+    try {
+        $resolvedProcessPath = [System.IO.Path]::GetFullPath($ProcessPath)
+        $resolvedDirectory = [System.IO.Path]::GetFullPath($DirectoryPath).TrimEnd('\')
+        return $resolvedProcessPath.StartsWith("$resolvedDirectory\", [System.StringComparison]::OrdinalIgnoreCase)
+    }
+    catch {
+        return $false
+    }
+}
+
+function Stop-NetvanGuiProcesses {
+    param(
+        [string]$InstallDirectory,
+        [string]$GuiSourceDirectory,
+        [switch]$StopUnscopedElectronGui
+    )
+
+    $scopedDirectories = @()
+    if ($InstallDirectory) {
+        $scopedDirectories += (Join-Path $InstallDirectory "gui")
+        $scopedDirectories += $InstallDirectory
+    }
+    if ($GuiSourceDirectory) {
+        $scopedDirectories += $GuiSourceDirectory
+        $scopedDirectories += (Join-Path $GuiSourceDirectory "dist" "win-unpacked")
+    }
+
+    foreach ($proc in @(Get-Process -Name Netvan -ErrorAction SilentlyContinue)) {
+        $procPath = $null
+        try {
+            $procPath = $proc.Path
+        }
+        catch {
+            # Path may be unavailable without elevation.
+        }
+
+        $shouldStop = $StopUnscopedElectronGui
+        if (-not $shouldStop -and $procPath) {
+            foreach ($directory in $scopedDirectories) {
+                if (Test-ProcessPathUnderDirectory -ProcessPath $procPath -DirectoryPath $directory) {
+                    $shouldStop = $true
+                    break
+                }
+            }
+        }
+
+        if ($shouldStop) {
+            Write-Info "Stopping Netvan GUI (PID $($proc.Id))..."
+            Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
+            if (Test-IsAdministrator) {
+                $null = & taskkill.exe /F /PID $proc.Id /T 2>&1
+            }
+        }
+    }
+
+    $electronProcesses = @(
+        Get-CimInstance Win32_Process -Filter "Name = 'electron.exe'" -ErrorAction SilentlyContinue
+    )
+    foreach ($proc in $electronProcesses) {
+        $commandLine = $proc.CommandLine
+        $executablePath = $proc.ExecutablePath
+        $shouldStop = $false
+
+        if ($StopUnscopedElectronGui) {
+            $shouldStop = $true
+        }
+        else {
+            foreach ($directory in $scopedDirectories) {
+                if (($commandLine -and $commandLine -like "*$directory*") -or
+                    (Test-ProcessPathUnderDirectory -ProcessPath $executablePath -DirectoryPath $directory)) {
+                    $shouldStop = $true
+                    break
+                }
+            }
+        }
+
+        if ($shouldStop) {
+            Write-Info "Stopping electron.exe (PID $($proc.ProcessId))..."
+            Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
+            if (Test-IsAdministrator) {
+                $null = & taskkill.exe /F /PID $proc.ProcessId /T 2>&1
+            }
+        }
+    }
+
+    Start-Sleep -Milliseconds 500
+}
+
+function Clear-GuiBuildOutput {
+    param(
+        [string]$GuiSourceDirectory,
+        [string]$InstallDirectory,
+        [string]$OutputDirectoryName = "dist-build",
+        [int]$MaxAttempts = 5
+    )
+
+    $outputDir = Join-Path $GuiSourceDirectory $OutputDirectoryName
+    if (-not (Test-Path $outputDir)) {
+        return
+    }
+
+    $appAsar = Join-Path $outputDir "win-unpacked" "resources" "app.asar"
+    Write-Info "Clearing previous GUI build output..."
+
+    for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
+        if ((Test-Path $appAsar) -and -not (Test-FileUnlocked -Path $appAsar)) {
+            Write-Host "[WARN] GUI build files are locked (attempt $attempt/$MaxAttempts); stopping Netvan GUI processes..." -ForegroundColor Yellow
+            Stop-NetvanGuiProcesses -InstallDirectory $InstallDirectory -GuiSourceDirectory $GuiSourceDirectory -StopUnscopedElectronGui
+            $null = Wait-ForFileUnlocked -Path $appAsar -TimeoutSeconds 5
+        }
+
+        try {
+            Remove-Item -Path $outputDir -Recurse -Force -ErrorAction Stop
+            Write-Success "Cleared previous GUI build output."
+            return
+        }
+        catch {
+            if ($attempt -eq $MaxAttempts) {
+                Write-Error-Exit "Could not clear GUI build output at $outputDir. Close Netvan GUI, any dev Electron session, and Explorer windows showing that folder, then re-run export.ps1."
+            }
+
+            Stop-NetvanGuiProcesses -InstallDirectory $InstallDirectory -GuiSourceDirectory $GuiSourceDirectory -StopUnscopedElectronGui
+            Start-Sleep -Seconds 1
+        }
+    }
+}
+
 function Install-NetvanGui {
     param([string]$TargetDir)
 
@@ -571,6 +714,9 @@ function Install-NetvanGui {
         Write-Host "[WARN] npm not found; skipping GUI installation. Install Node.js and re-run export.ps1 to include the GUI." -ForegroundColor Yellow
         return
     }
+
+    Stop-NetvanGuiProcesses -InstallDirectory $TargetDir -GuiSourceDirectory $guiSource
+    Clear-GuiBuildOutput -GuiSourceDirectory $guiSource -InstallDirectory $TargetDir
 
     Write-Info "Building Netvan GUI (Electron)..."
     $originalLocation = Get-Location
@@ -596,7 +742,7 @@ function Install-NetvanGui {
         Set-Location $originalLocation
     }
 
-    $unpackedDir = Join-Path $guiSource "dist" "win-unpacked"
+    $unpackedDir = Join-Path $guiSource "dist-build" "win-unpacked"
     if (-not (Test-Path $unpackedDir)) {
         Write-Host "[WARN] GUI build output not found at $unpackedDir; skipping GUI installation." -ForegroundColor Yellow
         return
