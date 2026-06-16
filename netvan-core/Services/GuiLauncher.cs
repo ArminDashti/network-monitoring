@@ -1,6 +1,5 @@
 #if WINDOWS
 using System.Diagnostics;
-using Netvan.Cli;
 
 namespace Netvan.Services;
 
@@ -34,13 +33,13 @@ internal static class GuiLauncher
       }
       catch (Exception ex)
       {
-        ConsoleUi.WriteError($"Failed to start GUI ({target.ExePath}): {ex.Message}");
+        ConsoleOutput.WriteError($"Failed to start GUI ({target.ExePath}): {ex.Message}");
         return 1;
       }
     }
 
-    ConsoleUi.WriteError(
-      "Netvan GUI not found. Re-run export.ps1 to build and install the GUI, or use netvan --help for CLI commands.");
+    ConsoleOutput.WriteError(
+      "Netvan GUI not found. Re-run export.ps1 to build and install the GUI.");
     return 1;
   }
 

@@ -1,6 +1,5 @@
 using System.Diagnostics;
 using System.Text.Json;
-using Netvan.Cli;
 using Netvan.Storage;
 
 namespace Netvan.Taskbar;
@@ -14,7 +13,7 @@ internal static class TaskbarWidgetManager
   public static int Enable()
   {
 #if !WINDOWS
-    ConsoleUi.WriteError("Taskbar widget requires a Windows build (net9.0-windows).");
+    ConsoleOutput.WriteError("Taskbar widget requires a Windows build (net9.0-windows).");
     return 1;
 #else
     Directory.CreateDirectory(NetvanPaths.Home);
@@ -22,7 +21,7 @@ internal static class TaskbarWidgetManager
     var exe = Environment.ProcessPath;
     if (string.IsNullOrEmpty(exe) || !File.Exists(exe))
     {
-      ConsoleUi.WriteError("Could not resolve netvan executable path.");
+      ConsoleOutput.WriteError("Could not resolve netvan executable path.");
       return 1;
     }
 
@@ -31,8 +30,8 @@ internal static class TaskbarWidgetManager
 
     if (TryReadState(out var existing) && IsProcessRunning(existing.ProcessId))
     {
-      ConsoleUi.WriteSuccess($"Taskbar widget already running (PID {existing.ProcessId}).");
-      ConsoleUi.WriteNote("Startup entry updated.");
+      ConsoleOutput.WriteSuccess($"Taskbar widget already running (PID {existing.ProcessId}).");
+      ConsoleOutput.WriteNote("Startup entry updated.");
       return 0;
     }
 
@@ -44,7 +43,7 @@ internal static class TaskbarWidgetManager
   public static int Disable()
   {
 #if !WINDOWS
-    ConsoleUi.WriteError("Taskbar widget requires a Windows build (net9.0-windows).");
+    ConsoleOutput.WriteError("Taskbar widget requires a Windows build (net9.0-windows).");
     return 1;
 #else
     TaskbarSettings.SetEnabled(false);
@@ -52,14 +51,14 @@ internal static class TaskbarWidgetManager
 
     if (!TryReadState(out var state))
     {
-      ConsoleUi.WriteSuccess("Taskbar widget disabled.");
+      ConsoleOutput.WriteSuccess("Taskbar widget disabled.");
       return 0;
     }
 
     if (!IsProcessRunning(state.ProcessId))
     {
       CleanupStalePidFile();
-      ConsoleUi.WriteSuccess("Taskbar widget disabled.");
+      ConsoleOutput.WriteSuccess("Taskbar widget disabled.");
       return 0;
     }
 
@@ -75,12 +74,12 @@ internal static class TaskbarWidgetManager
     }
     catch (Exception ex)
     {
-      ConsoleUi.WriteError($"Failed to stop taskbar widget: {ex.Message}");
+      ConsoleOutput.WriteError($"Failed to stop taskbar widget: {ex.Message}");
       return 1;
     }
 
     CleanupStalePidFile();
-    ConsoleUi.WriteSuccess("Taskbar widget disabled.");
+    ConsoleOutput.WriteSuccess("Taskbar widget disabled.");
     return 0;
 #endif
   }
@@ -133,30 +132,30 @@ internal static class TaskbarWidgetManager
     }
     catch (Exception ex)
     {
-      ConsoleUi.WriteError($"Failed to start taskbar widget: {ex.Message}");
+      ConsoleOutput.WriteError($"Failed to start taskbar widget: {ex.Message}");
       return 1;
     }
 
     if (child is null)
     {
-      ConsoleUi.WriteError("Failed to start taskbar widget process.");
+      ConsoleOutput.WriteError("Failed to start taskbar widget process.");
       return 1;
     }
 
     if (!WaitForState(TimeSpan.FromSeconds(5)))
     {
-      ConsoleUi.WriteError("Taskbar widget started but did not report ready in time.");
+      ConsoleOutput.WriteError("Taskbar widget started but did not report ready in time.");
       return 1;
     }
 
     if (!TryReadState(out var state))
     {
-      ConsoleUi.WriteError("Taskbar widget started but state file is missing.");
+      ConsoleOutput.WriteError("Taskbar widget started but state file is missing.");
       return 1;
     }
 
-    ConsoleUi.WriteSuccess($"Taskbar widget enabled (PID {state.ProcessId}).");
-    ConsoleUi.WriteNote("Upload/download speeds appear in the Windows taskbar.");
+    ConsoleOutput.WriteSuccess($"Taskbar widget enabled (PID {state.ProcessId}).");
+    ConsoleOutput.WriteNote("Upload/download speeds appear in the Windows taskbar.");
     return 0;
   }
 

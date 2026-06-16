@@ -5,10 +5,8 @@ database_path = "%NETVAN_HOME%\\traffic.db"
 
 # Monitoring settings
 [monitoring]
-# Enable/disable monitoring
-enabled = true
-# Sampling interval in seconds
-sampling_interval = 1
+# Exclude traffic over VPN network adapters
+disable_vpn_tracking = false
 
 # Storage settings
 [storage]

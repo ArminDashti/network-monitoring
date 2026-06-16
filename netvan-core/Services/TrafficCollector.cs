@@ -10,6 +10,8 @@ internal sealed class TrafficCollector
     private readonly NicResolver _nics; // Resolves local IP to NIC name
     private readonly HostNameCache _hosts; // Resolves remote IP to host label
     private readonly Dictionary<string, (ulong Out, ulong In)> _last = new(StringComparer.Ordinal); // Last byte counters per connection key
+    public bool DisableVpnTracking { get; set; }
+
     // Wires helper services used when sampling TCP connections
     public TrafficCollector(NicResolver nics, HostNameCache hosts)
     {
@@ -38,33 +40,7 @@ internal sealed class TrafficCollector
                 c.RemotePort,
                 c.OwningPid,
                 c.DataBytesOut,
-                c.DataBytesIn,
-                "tcp4");
-        }
-
-        try
-        {
-            foreach (var c in IpHelperApi.EnumerateTcp6Connections()) // Every IPv6 TCP row from Windows
-            {
-                if (IsNonPeer(c.RemoteIp, c.RemotePort)) // Skip listening or unset remote endpoints
-                    continue;
-
-                AddConnection(
-                    seen,
-                    deltas,
-                    c.LocalIp,
-                    c.LocalPort,
-                    c.RemoteIp,
-                    c.RemotePort,
-                    c.OwningPid,
-                    c.DataBytesOut,
-                    c.DataBytesIn,
-                    "tcp6");
-            }
-        }
-        catch (Exception)
-        {
-            // IPv6 table/stats APIs may be unavailable; IPv4 collection continues.
+                c.DataBytesIn);
         }
 
         foreach (var stale in _last.Keys.Where(k => !seen.Contains(k)).ToList()) // Closed connections
@@ -83,12 +59,14 @@ internal sealed class TrafficCollector
         ushort remotePort,
         uint owningPid,
         ulong bytesOut,
-        ulong bytesIn,
-        string familyTag)
+        ulong bytesIn)
     {
-        var nic = _nics.ResolveNicName(localIp); // Which adapter this socket uses
+        if (DisableVpnTracking && _nics.IsVpnLocalIp(localIp))
+            return;
+
+        var nic = _nics.ResolveNicName(localIp);
         var remoteKey = remoteIp.ToString(); // Text form for storage and display
-        var key = $"{familyTag}|{localIp}|{localPort}|{remoteKey}|{remotePort}"; // Unique per socket (local + remote)
+        var key = $"{localIp}|{localPort}|{remoteKey}|{remotePort}"; // Unique per socket (local + remote)
         seen.Add(key); // Mark as active in this sample
 
         if (!_last.TryGetValue(key, out var prev))

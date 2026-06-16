@@ -5,7 +5,6 @@ const { resolveHome } = require('./paths');
 const DEFAULTS = {
   launchAtStartup: false,
   closeToTray: true,
-  notificationsEnabled: true,
 };
 
 function getSettingsPath() {
@@ -23,7 +22,6 @@ function loadGuiSettings() {
     return {
       launchAtStartup: Boolean(parsed.launchAtStartup),
       closeToTray: parsed.closeToTray !== false,
-      notificationsEnabled: parsed.notificationsEnabled !== false,
     };
   } catch {
     return { ...DEFAULTS };
@@ -35,7 +33,6 @@ function saveGuiSettings(settings) {
   const merged = {
     launchAtStartup: Boolean(settings.launchAtStartup),
     closeToTray: settings.closeToTray !== false,
-    notificationsEnabled: settings.notificationsEnabled !== false,
   };
 
   fs.mkdirSync(path.dirname(filePath), { recursive: true });

@@ -13,7 +13,7 @@ internal static class FirewallBlockService
     private const string RuleNamePrefix = "netvan-block";
 
     /// <summary>
-    /// Blocks outbound traffic to the given remote IP (IPv4 or IPv6).
+    /// Blocks outbound traffic to the given remote IPv4 address.
     /// </summary>
     public static bool TryBlockOutboundToIp(string remoteIp, out string errorMessage)
     {
@@ -82,7 +82,7 @@ internal static class FirewallBlockService
         try
         {
             ips = Dns.GetHostAddresses(host)
-                .Where(a => a.AddressFamily is AddressFamily.InterNetwork or AddressFamily.InterNetworkV6)
+                .Where(a => a.AddressFamily == AddressFamily.InterNetwork)
                 .Distinct()
                 .ToList();
         }

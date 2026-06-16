@@ -38,7 +38,7 @@ internal static class WindowsServiceManager
         return status is ServiceControllerStatus.Running or ServiceControllerStatus.StartPending;
     }
 
-    public static int Install(string executablePath, int intervalSeconds, string dbPath, out string message)
+    public static int Install(string executablePath, string dbPath, out string message)
     {
         if (!OperatingSystem.IsWindows())
         {
@@ -52,19 +52,13 @@ internal static class WindowsServiceManager
             return 1;
         }
 
-        if (intervalSeconds < 1)
-        {
-            message = "Interval must be at least 1 second.";
-            return 1;
-        }
-
         if (IsInstalled())
         {
             message = $"Service '{ServiceName}' is already installed. Run 'netvan service uninstall' first to reinstall.";
             return 1;
         }
 
-        var binPath = BuildBinaryPath(executablePath, intervalSeconds, dbPath);
+        var binPath = BuildBinaryPath(executablePath, dbPath);
         var createArgs = $"create {ServiceName} binPath= {binPath} start= auto DisplayName= \"{DisplayName}\"";
         if (!RunSc(createArgs, out var createError))
         {
@@ -168,8 +162,8 @@ internal static class WindowsServiceManager
         }
     }
 
-    public static string BuildBinaryPath(string executablePath, int intervalSeconds, string dbPath) =>
-        $"\"\\\"{executablePath}\\\" run --interval {intervalSeconds} --db \\\"{dbPath}\\\"\"";
+    public static string BuildBinaryPath(string executablePath, string dbPath) =>
+        $"\"\\\"{executablePath}\\\" run --db \\\"{dbPath}\\\"\"";
 
     private static bool RunSc(string arguments, out string error)
     {

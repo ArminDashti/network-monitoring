@@ -7,15 +7,16 @@ const {
   Tray,
   Menu,
   nativeImage,
-  Notification,
 } = require('electron');
 const path = require('path');
-const { loadConfig, resolveHome } = require('./src/lib/paths');
+const { loadConfig, resolveHome, saveConfigPatch } = require('./src/lib/paths');
 const { loadGuiSettings, saveGuiSettings } = require('./src/lib/gui-settings');
 const { openStore } = require('./src/lib/traffic-store');
 const { resolveRangeUtc } = require('./src/lib/date-utils');
 const {
   getServiceStatus,
+  installService,
+  uninstallService,
   startService,
   stopService,
   restartService,
@@ -34,6 +35,8 @@ let tray = null;
 let config = null;
 let guiSettings = loadGuiSettings();
 let appIsQuitting = false;
+let storeOperations = 0;
+let storeBlocked = false;
 
 const TRAY_ICON = nativeImage.createFromDataURL(
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAKUlEQVQ4T2P8z8BQz0BFwQgGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGAJh8AAD//wMA'
@@ -76,7 +79,6 @@ function createWindow() {
     if (!appIsQuitting && guiSettings.closeToTray) {
       event.preventDefault();
       mainWindow.hide();
-      showAppNotification('Netvan', 'Still running in the system tray.');
     }
   });
 
@@ -105,19 +107,6 @@ function showMainWindow() {
 function quitApp() {
   appIsQuitting = true;
   app.quit();
-}
-
-function showAppNotification(title, body) {
-  if (!guiSettings.notificationsEnabled) return;
-  if (!Notification.isSupported()) return;
-
-  const notification = new Notification({
-    title,
-    body,
-    icon: TRAY_ICON,
-    silent: false,
-  });
-  notification.show();
 }
 
 function applyLaunchAtStartup(enabled) {
@@ -161,7 +150,12 @@ function applyGuiSettings() {
 }
 
 function withStore(fn) {
+  if (storeBlocked) {
+    return { error: 'Database temporarily unavailable', config: loadConfig() };
+  }
+
   config = loadConfig();
+  storeOperations += 1;
   let store;
   try {
     store = openStore(config.databasePath);
@@ -170,11 +164,41 @@ function withStore(fn) {
     return { error: err.message, config };
   } finally {
     if (store) store.close();
+    storeOperations -= 1;
+  }
+}
+
+function waitForStoreIdle(timeoutMs = 5000) {
+  const started = Date.now();
+  return new Promise((resolve) => {
+    const check = () => {
+      if (storeOperations === 0 || Date.now() - started >= timeoutMs) {
+        resolve(storeOperations === 0);
+        return;
+      }
+      setTimeout(check, 50);
+    };
+    check();
+  });
+}
+
+async function resetDatabaseSafely() {
+  storeBlocked = true;
+  await waitForStoreIdle();
+  try {
+    return await resetData();
+  } finally {
+    storeBlocked = false;
   }
 }
 
 function registerIpc() {
   ipcMain.handle('app:get-config', () => loadConfig());
+
+  ipcMain.handle('app:set-config', (_, patch) => {
+    saveConfigPatch(patch);
+    return loadConfig();
+  });
 
   ipcMain.handle('settings:get', () => loadGuiSettings());
 
@@ -228,12 +252,7 @@ function registerIpc() {
       };
     }
 
-    return {
-      kind: 'totals',
-      fromUtc,
-      toUtc,
-      totals: store.usageTotalsInRange(fromUtc, toUtc, null, null, includePrivate),
-    };
+    return { error: `Unknown usage target '${target}'. Expected apps, host, or ip.` };
   }));
 
   ipcMain.handle('db:apps', (_, filter) => withStore((store) => ({
@@ -247,10 +266,12 @@ function registerIpc() {
   }));
 
   ipcMain.handle('netvan:service-status', () => getServiceStatus());
+  ipcMain.handle('netvan:service-install', () => installService());
+  ipcMain.handle('netvan:service-uninstall', () => uninstallService());
   ipcMain.handle('netvan:service-start', () => startService());
   ipcMain.handle('netvan:service-stop', () => stopService());
   ipcMain.handle('netvan:service-restart', () => restartService());
-  ipcMain.handle('netvan:reset', () => resetData());
+  ipcMain.handle('netvan:reset', () => resetDatabaseSafely());
 
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());
   ipcMain.handle('window:maximize', () => {

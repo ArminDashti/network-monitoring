@@ -1,5 +1,5 @@
+using System.Globalization;
 using Microsoft.Data.Sqlite;
-using Netvan.Cli;
 
 namespace Netvan.Storage;
 
@@ -148,7 +148,6 @@ internal sealed class TrafficStore : IDisposable
         int? limit = null)
     {
         using var cmd = _connection.CreateCommand();
-        var limitClause = limit is null ? "" : $" LIMIT {limit.Value}";
         cmd.CommandText = BuildRangeSql(
             """
             SELECT remote_ip,
@@ -159,12 +158,10 @@ internal sealed class TrafficStore : IDisposable
             """,
             includePrivate,
             target: null,
-            trailingSql: $"GROUP BY remote_ip{limitClause};");
+            trailingSql: BuildGroupedOrderLimitSql("remote_ip", limit));
         cmd.Parameters.AddWithValue("$from", fromUtcInclusive);
         cmd.Parameters.AddWithValue("$to", toUtcInclusive);
-        var ipRows = ReadIpUsageRows(cmd)
-            .OrderByDescending(r => r.BytesSent + r.BytesReceived);
-        return limit is null ? ipRows.ToList() : ipRows.Take(limit.Value).ToList();
+        return ReadIpUsageRows(cmd);
     }
 
     public IReadOnlyList<HostUsageRow> UsageByHostInRangeUtc(
@@ -174,7 +171,6 @@ internal sealed class TrafficStore : IDisposable
         int? limit = null)
     {
         using var cmd = _connection.CreateCommand();
-        var limitClause = limit is null ? "" : $" LIMIT {limit.Value}";
         cmd.CommandText = BuildRangeSql(
             """
             SELECT host_name,
@@ -185,12 +181,10 @@ internal sealed class TrafficStore : IDisposable
             """,
             includePrivate,
             target: null,
-            trailingSql: $"GROUP BY host_name{limitClause};");
+            trailingSql: BuildGroupedOrderLimitSql("host_name", limit));
         cmd.Parameters.AddWithValue("$from", fromUtcInclusive);
         cmd.Parameters.AddWithValue("$to", toUtcInclusive);
-        var hostRows = ReadHostUsageRows(cmd)
-            .OrderByDescending(r => r.BytesSent + r.BytesReceived);
-        return limit is null ? hostRows.ToList() : hostRows.Take(limit.Value).ToList();
+        return ReadHostUsageRows(cmd);
     }
 
     public IReadOnlyList<string> ListAppNames(string? filter)
@@ -297,10 +291,21 @@ internal sealed class TrafficStore : IDisposable
     }
 
     /// <summary>
+    /// UTC timestamp label without fractional seconds, matching stored <c>minute_utc</c> values.
+    /// </summary>
+    internal static string FormatUtcIso(DateTime dateTime)
+    {
+        var utc = dateTime.Kind == DateTimeKind.Utc
+            ? dateTime
+            : dateTime.ToUniversalTime();
+        return utc.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'", CultureInfo.InvariantCulture);
+    }
+
+    /// <summary>
     /// End-aligned bucket label for the 1-second interval containing <paramref name="utcNow"/>.
     /// </summary>
     internal static string FormatBucketUtc(DateTime utcNow) =>
-        AlignBucketEndUtc(utcNow, BucketIntervalSeconds).ToString("yyyy-MM-ddTHH:mm:ssZ");
+        FormatUtcIso(AlignBucketEndUtc(utcNow, BucketIntervalSeconds));
 
     internal static DateTime AlignBucketEndUtc(DateTime utcNow, int bucketIntervalSeconds)
     {
@@ -312,6 +317,11 @@ internal sealed class TrafficStore : IDisposable
         var bucketEndSeconds = ((epochSeconds + bucketIntervalSeconds - 1) / bucketIntervalSeconds) * bucketIntervalSeconds;
         return DateTime.UnixEpoch.AddSeconds(bucketEndSeconds);
     }
+
+    private static string BuildGroupedOrderLimitSql(string groupColumn, int? limit) =>
+        limit is null
+            ? $"GROUP BY {groupColumn} ORDER BY bytes_sent_total + bytes_recv_total DESC;"
+            : $"GROUP BY {groupColumn} ORDER BY bytes_sent_total + bytes_recv_total DESC LIMIT {limit.Value};";
 
     private static string BuildRangeSql(
         string selectAndWhere,
@@ -441,12 +451,13 @@ internal sealed class TrafficStore : IDisposable
                      SUM(bytes_sent) AS up,
                      SUM(bytes_received) AS down
               FROM usage
-              WHERE host_name LIKE $f
+              WHERE 1=1
+              """ + QueryFilters.HostMatchClause() + """
               GROUP BY host_name
               ORDER BY bytes_sent + bytes_received DESC;
               """;
         if (filterHost is not null)
-            cmd.Parameters.AddWithValue("$f", $"%{filterHost}%");
+            QueryFilters.AddHostMatchParameters(cmd, filterHost);
         return ReadHostRows(cmd);
     }
 

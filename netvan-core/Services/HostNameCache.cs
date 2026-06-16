@@ -1,6 +1,5 @@
 using System.Collections.Concurrent;
 using System.Net;
-using System.Net.Sockets;
 
 namespace Netvan.Services;
 
@@ -18,9 +17,6 @@ internal sealed class HostNameCache
     // Returns a cached host label when available; otherwise the IP text (no blocking DNS).
     public string GetHostLabelFast(IPAddress remote)
     {
-        if (remote.AddressFamily == AddressFamily.InterNetworkV6 && remote.IsIPv4MappedToIPv6)
-            remote = remote.MapToIPv4();
-
         if (IPAddress.IsLoopback(remote))
             return "localhost";
 
@@ -34,9 +30,6 @@ internal sealed class HostNameCache
     // Returns a friendly host label for a remote IP, using cache and reverse DNS
     public string GetHostLabel(IPAddress remote)
     {
-        if (remote.AddressFamily == AddressFamily.InterNetworkV6 && remote.IsIPv4MappedToIPv6)
-            remote = remote.MapToIPv4();
-
         if (IPAddress.IsLoopback(remote))
             return "localhost";
 

@@ -63,15 +63,23 @@ function parseTomlValue(raw) {
   return trimmed;
 }
 
+function parseTomlBool(raw, fallback = false) {
+  if (raw === undefined || raw === null || raw === '') return fallback;
+  const value = String(raw).trim().toLowerCase();
+  if (value === 'true' || value === 'yes' || value === '1') return true;
+  if (value === 'false' || value === 'no' || value === '0') return false;
+  return fallback;
+}
+
 function loadConfig(home = resolveHome()) {
   const configPath = path.join(home, 'configs.toml');
   const defaults = {
     databasePath: path.join(home, 'traffic.db'),
-    samplingInterval: 1,
     retentionDays: 30,
     maxSizeMb: 500,
     logLevel: 'Info',
     logFile: path.join(home, 'netvan.log'),
+    disableVpnTracking: false,
   };
 
   if (!fs.existsSync(configPath)) {
@@ -110,12 +118,56 @@ function loadConfig(home = resolveHome()) {
     home,
     configPath,
     databasePath,
-    samplingInterval: Number(values['monitoring.sampling_interval'] || defaults.samplingInterval),
     retentionDays: Number(values['storage.retention_days'] || defaults.retentionDays),
     maxSizeMb: Number(values['storage.max_size_mb'] || defaults.maxSizeMb),
     logLevel: values['logging.level'] || defaults.logLevel,
     logFile: expandPath(values['logging.log_file'] || defaults.logFile, home),
+    disableVpnTracking: parseTomlBool(values['monitoring.disable_vpn_tracking'], defaults.disableVpnTracking),
   };
 }
 
-module.exports = { resolveHome, expandPath, loadConfig };
+function saveConfigPatch(patch, home = resolveHome()) {
+  const configPath = path.join(home, 'configs.toml');
+  const current = loadConfig(home);
+  const merged = { ...current, ...patch };
+
+  const lines = [];
+  if (fs.existsSync(configPath)) {
+    lines.push(...fs.readFileSync(configPath, 'utf8').split(/\r?\n/));
+  }
+
+  const upsertInSection = (section, key, value) => {
+    const sectionHeader = `[${section}]`;
+    let sectionIndex = lines.findIndex((line) => line.trim().toLowerCase() === sectionHeader.toLowerCase());
+    if (sectionIndex < 0) {
+      if (lines.length && lines[lines.length - 1].trim()) lines.push('');
+      lines.push(sectionHeader);
+      sectionIndex = lines.length - 1;
+    }
+
+    const keyPrefix = `${key} =`;
+    let keyIndex = -1;
+    for (let i = sectionIndex + 1; i < lines.length; i += 1) {
+      const trimmed = lines[i].trim();
+      if (trimmed.startsWith('[')) break;
+      if (trimmed.toLowerCase().startsWith(keyPrefix.toLowerCase())) {
+        keyIndex = i;
+        break;
+      }
+    }
+
+    const rendered = `${key} = ${value}`;
+    if (keyIndex >= 0) lines[keyIndex] = rendered;
+    else lines.splice(sectionIndex + 1, 0, rendered);
+  };
+
+  if (Object.prototype.hasOwnProperty.call(patch, 'disableVpnTracking')) {
+    upsertInSection('monitoring', 'disable_vpn_tracking', merged.disableVpnTracking ? 'true' : 'false');
+  }
+
+  fs.mkdirSync(path.dirname(configPath), { recursive: true });
+  fs.writeFileSync(configPath, `${lines.join('\n').replace(/\n*$/, '\n')}`, 'utf8');
+  return loadConfig(home);
+}
+
+module.exports = { resolveHome, expandPath, loadConfig, saveConfigPatch };

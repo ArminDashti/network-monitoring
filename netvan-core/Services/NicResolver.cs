@@ -1,52 +1,153 @@
 using System.Collections.Concurrent;
+
 using System.Net;
+
 using System.Net.NetworkInformation;
+
+using System.Net.Sockets;
+
+
 
 namespace Netvan.Services;
 
-internal sealed class NicResolver
-{
-    private readonly ConcurrentDictionary<string, string> _localIpToNic = new(StringComparer.OrdinalIgnoreCase); // Maps local IP to NIC display name
 
-    // Rebuilds the local IP to network interface name map from active adapters
+
+internal sealed class NicResolver
+
+{
+
+    private readonly ConcurrentDictionary<string, string> _localIpToNic = new(StringComparer.OrdinalIgnoreCase);
+
+    private readonly ConcurrentDictionary<string, bool> _localIpIsVpn = new(StringComparer.OrdinalIgnoreCase);
+
+
+
+    private static readonly string[] VpnKeywords =
+
+    [
+
+        "vpn",
+
+        "wireguard",
+
+        "wintun",
+
+        "tap-",
+
+        "tun ",
+
+        "openvpn",
+
+        "nordlynx",
+
+        "tailscale",
+
+        "zerotier",
+
+        "hamachi",
+
+        "softether",
+
+    ];
+
+
+
     public void Refresh()
+
     {
-        _localIpToNic.Clear(); // Drop stale addresses from unplugged or disabled NICs
-        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces()) // Walk every adapter on the machine
+
+        _localIpToNic.Clear();
+
+        _localIpIsVpn.Clear();
+
+
+
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+
         {
-            if (ni.OperationalStatus != OperationalStatus.Up) // Skip adapters that are down
+
+            if (ni.OperationalStatus != OperationalStatus.Up)
+
                 continue;
 
-            foreach (var addr in ni.GetIPProperties().UnicastAddresses) // Each assigned IP on this adapter
+
+
+            var isVpn = IsVpnInterface(ni);
+
+
+
+            foreach (var addr in ni.GetIPProperties().UnicastAddresses)
+
             {
-                var key = NormalizeLocalKey(addr.Address); // Use a stable string key for lookups
-                _localIpToNic[key] = ni.Name; // Remember which NIC owns this local address
+
+                if (addr.Address.AddressFamily != AddressFamily.InterNetwork)
+
+                    continue;
+
+
+
+                var key = addr.Address.ToString();
+
+                _localIpToNic[key] = ni.Name;
+
+                if (isVpn)
+
+                    _localIpIsVpn[key] = true;
+
             }
+
         }
+
     }
 
-    // Finds the network interface name for a connection's local IP address
+
+
     public string ResolveNicName(IPAddress localIp)
+
     {
-        var key = NormalizeLocalKey(localIp); // Match the same key format used in Refresh
-        if (_localIpToNic.TryGetValue(key, out var name)) // Known address from a live adapter
+
+        var key = localIp.ToString();
+
+        if (_localIpToNic.TryGetValue(key, out var name))
+
             return name;
 
-        if (IPAddress.IsLoopback(localIp)) // 127.0.0.1 style traffic
+
+
+        if (IPAddress.IsLoopback(localIp))
+
             return "Loopback";
 
-        return "Unknown"; // Address not seen on any up interface
+
+
+        return "Unknown";
+
     }
 
-    // Builds a lookup key that treats IPv4-mapped IPv6 like plain IPv4
-    private static string NormalizeLocalKey(IPAddress ip)
+
+
+    public bool IsVpnLocalIp(IPAddress localIp) =>
+
+        _localIpIsVpn.ContainsKey(localIp.ToString());
+
+
+
+    private static bool IsVpnInterface(NetworkInterface ni)
+
     {
-        if (ip.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6) // IPv6 family
-        {
-            if (ip.IsIPv4MappedToIPv6) // ::ffff:192.0.2.1 style address
-                return ip.MapToIPv4().ToString(); // Store as dotted IPv4 text
-        }
 
-        return ip.ToString(); // Default string form for the address
+        if (ni.NetworkInterfaceType is NetworkInterfaceType.Ppp or NetworkInterfaceType.Tunnel)
+
+            return true;
+
+
+
+        var haystack = $"{ni.Name} {ni.Description}".ToLowerInvariant();
+
+        return VpnKeywords.Any(keyword => haystack.Contains(keyword, StringComparison.Ordinal));
+
     }
+
 }
+
+

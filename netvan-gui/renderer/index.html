@@ -46,10 +46,6 @@
           <svg viewBox="0 0 24 24" fill="none"><rect x="3" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="3" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="3" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/><rect x="14" y="14" width="7" height="7" rx="1.5" stroke="currentColor" stroke-width="1.8"/></svg>
           <span>Apps</span>
         </button>
-        <button class="nav-item" data-view="service">
-          <svg viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.8"/><path d="M12 2v2M12 20v2M4.93 4.93l1.41 1.41M17.66 17.66l1.41 1.41M2 12h2M20 12h2M4.93 19.07l1.41-1.41M17.66 6.34l1.41-1.41" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
-          <span>Service</span>
-        </button>
         <button class="nav-item" data-view="settings">
           <svg viewBox="0 0 24 24" fill="none"><path d="M12 8a4 4 0 110 8 4 4 0 010-8z" stroke="currentColor" stroke-width="1.8"/><path d="M4 12h2M18 12h2M12 4v2M12 18v2M6.3 6.3l1.4 1.4M16.3 16.3l1.4 1.4M6.3 17.7l1.4-1.4M16.3 7.7l1.4-1.4" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/></svg>
           <span>Settings</span>
@@ -62,21 +58,7 @@
 
       <main class="content">
         <!-- Live View -->
-        <section class="view view-active" id="view-live">
-          <div class="view-header">
-            <div>
-              <h1>Live Traffic</h1>
-              <p class="subtitle">Real-time per-application network usage</p>
-            </div>
-            <div class="header-actions">
-              <span class="header-updated" id="live-updated"></span>
-              <span class="status-pill" id="live-status">
-                <span class="status-dot"></span>
-                Updating…
-              </span>
-            </div>
-          </div>
-
+        <section class="view view-active live-view" id="view-live">
           <div class="speed-cards">
             <div class="speed-card download">
               <div class="speed-label">Download</div>
@@ -90,23 +72,28 @@
             </div>
           </div>
 
-          <div class="card">
-            <div class="table-wrap">
-              <table class="data-table" id="live-table">
-                <thead>
-                  <tr>
-                    <th class="sortable" data-sort="appName">Application</th>
-                    <th class="num sortable sorted-desc" data-sort="currentDownBytes">Download</th>
-                    <th class="num sortable" data-sort="currentUpBytes">Upload</th>
-                    <th class="num sortable" data-sort="dailyDownBytes">Daily ↓/↑</th>
-                    <th class="num sortable" data-sort="weeklyDownBytes">Weekly ↓/↑</th>
-                    <th class="num sortable" data-sort="monthlyDownBytes">Monthly ↓/↑</th>
-                  </tr>
-                </thead>
-                <tbody id="live-tbody">
-                  <tr><td colspan="6" class="empty-state">Loading…</td></tr>
-                </tbody>
-              </table>
+          <div class="card live-chart-card">
+            <div class="card-header">
+              <h2>Throughput</h2>
+              <span class="header-updated" id="live-chart-updated">—</span>
+            </div>
+            <div class="chart-panel">
+              <canvas id="live-main-chart" aria-label="Live download and upload throughput"></canvas>
+              <p class="chart-empty" id="live-main-empty">Waiting for traffic…</p>
+            </div>
+          </div>
+
+          <div class="card live-breakdown-card">
+            <div class="card-header">
+              <h2>Per application</h2>
+              <span class="chart-legend">
+                <span class="legend-item"><span class="legend-swatch download"></span>Download</span>
+                <span class="legend-item"><span class="legend-swatch upload"></span>Upload</span>
+              </span>
+            </div>
+            <div class="chart-panel chart-panel-compact">
+              <canvas id="live-app-chart" aria-label="Current speed per application"></canvas>
+              <p class="chart-empty" id="live-app-empty">No active applications</p>
             </div>
           </div>
         </section>
@@ -122,21 +109,26 @@
 
           <div class="card filters-card">
             <div class="filters-grid">
-              <label class="field">
+              <label class="field field-datetime">
                 <span>From</span>
-                <input type="text" id="usage-from" placeholder="yyMMddTHHmm (default: today)">
+                <div class="datetime-row">
+                  <input type="date" id="usage-from-date" aria-label="From date">
+                  <input type="time" id="usage-from-time" step="60" aria-label="From time">
+                </div>
               </label>
-              <label class="field">
+              <label class="field field-datetime">
                 <span>To</span>
-                <input type="text" id="usage-to" placeholder="yyMMddTHHmm (default: now)">
+                <div class="datetime-row">
+                  <input type="date" id="usage-to-date" aria-label="To date">
+                  <input type="time" id="usage-to-time" step="60" aria-label="To time">
+                </div>
               </label>
               <label class="field">
                 <span>Target</span>
                 <select id="usage-target">
-                  <option value="totals">All apps (totals)</option>
-                  <option value="apps">By application</option>
-                  <option value="ip">Top remote IPs</option>
-                  <option value="host">Top hostnames</option>
+                  <option value="apps">Apps</option>
+                  <option value="host">Hostnames</option>
+                  <option value="ip">IPs</option>
                 </select>
               </label>
               <label class="field checkbox-field">
@@ -174,53 +166,20 @@
           </div>
         </section>
 
-        <!-- Service View -->
-        <section class="view" id="view-service">
-          <div class="view-header">
-            <div>
-              <h1>Service Control</h1>
-              <p class="subtitle">Install, start, stop, and monitor the Netvan Windows service.</p>
-            </div>
-            <div class="header-actions">
-              <button class="btn btn-secondary" id="service-refresh">Refresh</button>
-            </div>
-          </div>
-
-          <div class="service-grid">
-            <div class="card">
-              <div class="card-header"><h2>Windows Service</h2></div>
-              <pre class="status-output" id="service-output">Loading…</pre>
-              <div class="card-actions">
-                <button class="btn btn-primary" id="service-start">Start</button>
-                <button class="btn btn-danger" id="service-stop">Stop</button>
-                <button class="btn btn-secondary" id="service-restart">Restart</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="card reset-card">
-            <div class="card-header">
-              <div>
-                <h2>Reset Traffic Data</h2>
-                <p class="card-subtitle">Deletes the database and restarts the Windows service if it is running</p>
-              </div>
-            </div>
-            <div class="card-actions reset-actions">
-              <button class="btn btn-danger" id="data-reset">Reset Database</button>
-            </div>
-          </div>
-        </section>
-
         <!-- Settings View -->
         <section class="view" id="view-settings">
           <div class="view-header">
             <div>
               <h1>Settings</h1>
-              <p class="subtitle">Startup, tray behavior, and notifications</p>
+              <p class="subtitle">Application, collection, and service preferences</p>
+            </div>
+            <div class="header-actions">
+              <button class="btn btn-secondary" id="service-refresh">Refresh service</button>
             </div>
           </div>
 
           <div class="card">
+            <div class="card-header"><h2>Application</h2></div>
             <div class="settings-list">
               <label class="settings-row">
                 <div class="settings-copy">
@@ -238,13 +197,43 @@
                 <input type="checkbox" id="setting-close-tray" aria-label="Minimize to tray when closing">
               </label>
 
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><h2>Collection</h2></div>
+            <div class="settings-list">
               <label class="settings-row">
                 <div class="settings-copy">
-                  <div class="settings-title">Enable notifications</div>
-                  <div class="settings-desc">Show Windows notifications, for example when Netvan moves to the tray.</div>
+                  <div class="settings-title">Disable VPN tracking</div>
+                  <div class="settings-desc">Exclude traffic over VPN network adapters from collection. Takes effect on the next service sample.</div>
                 </div>
-                <input type="checkbox" id="setting-notifications" aria-label="Enable notifications">
+                <input type="checkbox" id="setting-disable-vpn" aria-label="Disable VPN tracking">
               </label>
+            </div>
+          </div>
+
+          <div class="card">
+            <div class="card-header"><h2>Windows Service</h2></div>
+            <pre class="status-output" id="service-output">Loading…</pre>
+            <div class="card-actions">
+              <button class="btn btn-primary" id="service-install">Install</button>
+              <button class="btn btn-secondary" id="service-uninstall">Uninstall</button>
+              <button class="btn btn-primary" id="service-start">Start</button>
+              <button class="btn btn-danger" id="service-stop">Stop</button>
+              <button class="btn btn-secondary" id="service-restart">Restart</button>
+            </div>
+          </div>
+
+          <div class="card reset-card">
+            <div class="card-header">
+              <div>
+                <h2>Reset Traffic Data</h2>
+                <p class="card-subtitle">Deletes the database and restarts the Windows service if it is running</p>
+              </div>
+            </div>
+            <div class="card-actions reset-actions">
+              <button class="btn btn-danger" id="data-reset">Reset Database</button>
             </div>
           </div>
         </section>

@@ -122,71 +122,73 @@ class TrafficStore {
   }
 
   loadRealtimeSnapshot(includePrivate = true) {
-    const nowLocal = new Date();
-    const dailyStartLocal = startOfDayLocal(nowLocal);
-    const weeklyStartLocal = startOfWeekSaturdayLocal(nowLocal);
-    const monthlyStartLocal = startOfMonthLocal(nowLocal);
+    return this.db.transaction(() => {
+      const nowLocal = new Date();
+      const dailyStartLocal = startOfDayLocal(nowLocal);
+      const weeklyStartLocal = startOfWeekSaturdayLocal(nowLocal);
+      const monthlyStartLocal = startOfMonthLocal(nowLocal);
 
-    const nowUtc = formatBucketUtc(nowLocal);
-    const dailyUtc = toUtcIso(dailyStartLocal);
-    const weeklyUtc = toUtcIso(weeklyStartLocal);
-    const monthlyUtc = toUtcIso(monthlyStartLocal);
+      const nowUtc = formatBucketUtc(nowLocal);
+      const dailyUtc = toUtcIso(dailyStartLocal);
+      const weeklyUtc = toUtcIso(weeklyStartLocal);
+      const monthlyUtc = toUtcIso(monthlyStartLocal);
 
-    const toMap = (rows) => {
-      const map = new Map();
-      for (const row of rows) {
-        map.set(normalizeAppName(row.app_name), row);
-      }
-      return map;
-    };
-
-    const currentRows = toMap(this.usageByAppInRange(nowUtc, nowUtc, includePrivate));
-    const dailyRows = toMap(this.usageByAppInRange(dailyUtc, nowUtc, includePrivate));
-    const weeklyRows = toMap(this.usageByAppInRange(weeklyUtc, nowUtc, includePrivate));
-    const monthlyRows = toMap(this.usageByAppInRange(monthlyUtc, nowUtc, includePrivate));
-
-    const apps = [...new Set([
-      ...currentRows.keys(),
-      ...dailyRows.keys(),
-      ...weeklyRows.keys(),
-      ...monthlyRows.keys(),
-    ])].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
-
-    const rows = apps.map((app) => {
-      const current = currentRows.get(app) || { bytes_received: 0, bytes_sent: 0 };
-      const daily = dailyRows.get(app) || { bytes_received: 0, bytes_sent: 0 };
-      const weekly = weeklyRows.get(app) || { bytes_received: 0, bytes_sent: 0 };
-      const monthly = monthlyRows.get(app) || { bytes_received: 0, bytes_sent: 0 };
-      return {
-        appName: app,
-        currentDownBytes: current.bytes_received,
-        currentUpBytes: current.bytes_sent,
-        dailyDownBytes: daily.bytes_received,
-        dailyUpBytes: daily.bytes_sent,
-        weeklyDownBytes: weekly.bytes_received,
-        weeklyUpBytes: weekly.bytes_sent,
-        monthlyDownBytes: monthly.bytes_received,
-        monthlyUpBytes: monthly.bytes_sent,
+      const toMap = (rows) => {
+        const map = new Map();
+        for (const row of rows) {
+          map.set(normalizeAppName(row.app_name), row);
+        }
+        return map;
       };
-    });
 
-    rows.sort((a, b) => {
-      const totalA = a.currentDownBytes + a.currentUpBytes;
-      const totalB = b.currentDownBytes + b.currentUpBytes;
-      return totalB - totalA;
-    });
+      const currentRows = toMap(this.usageByAppInRange(nowUtc, nowUtc, includePrivate));
+      const dailyRows = toMap(this.usageByAppInRange(dailyUtc, nowUtc, includePrivate));
+      const weeklyRows = toMap(this.usageByAppInRange(weeklyUtc, nowUtc, includePrivate));
+      const monthlyRows = toMap(this.usageByAppInRange(monthlyUtc, nowUtc, includePrivate));
 
-    const totals = this.usageTotalsInRange(nowUtc, nowUtc, null, null, includePrivate);
+      const apps = [...new Set([
+        ...currentRows.keys(),
+        ...dailyRows.keys(),
+        ...weeklyRows.keys(),
+        ...monthlyRows.keys(),
+      ])].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
 
-    return {
-      nowLocal: nowLocal.toISOString(),
-      dailyStartLocal: dailyStartLocal.toISOString(),
-      weeklyStartLocal: weeklyStartLocal.toISOString(),
-      monthlyStartLocal: monthlyStartLocal.toISOString(),
-      totalDownBytes: totals.bytesReceived,
-      totalUpBytes: totals.bytesSent,
-      rows,
-    };
+      const rows = apps.map((app) => {
+        const current = currentRows.get(app) || { bytes_received: 0, bytes_sent: 0 };
+        const daily = dailyRows.get(app) || { bytes_received: 0, bytes_sent: 0 };
+        const weekly = weeklyRows.get(app) || { bytes_received: 0, bytes_sent: 0 };
+        const monthly = monthlyRows.get(app) || { bytes_received: 0, bytes_sent: 0 };
+        return {
+          appName: app,
+          currentDownBytes: current.bytes_received,
+          currentUpBytes: current.bytes_sent,
+          dailyDownBytes: daily.bytes_received,
+          dailyUpBytes: daily.bytes_sent,
+          weeklyDownBytes: weekly.bytes_received,
+          weeklyUpBytes: weekly.bytes_sent,
+          monthlyDownBytes: monthly.bytes_received,
+          monthlyUpBytes: monthly.bytes_sent,
+        };
+      });
+
+      rows.sort((a, b) => {
+        const totalA = a.currentDownBytes + a.currentUpBytes;
+        const totalB = b.currentDownBytes + b.currentUpBytes;
+        return totalB - totalA;
+      });
+
+      const totals = this.usageTotalsInRange(nowUtc, nowUtc, null, null, includePrivate);
+
+      return {
+        nowLocal: nowLocal.toISOString(),
+        dailyStartLocal: dailyStartLocal.toISOString(),
+        weeklyStartLocal: weeklyStartLocal.toISOString(),
+        monthlyStartLocal: monthlyStartLocal.toISOString(),
+        totalDownBytes: totals.bytesReceived,
+        totalUpBytes: totals.bytesSent,
+        rows,
+      };
+    })();
   }
 
   usageTimeSeries(fromUtc, toUtc, bucketMinutes, includePrivate) {

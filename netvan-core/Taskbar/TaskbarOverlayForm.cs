@@ -1,4 +1,3 @@
-using Netvan.Cli;
 using Netvan.Storage;
 
 namespace Netvan.Taskbar;
@@ -19,7 +18,6 @@ internal sealed class TaskbarOverlayForm : Form
   public TaskbarOverlayForm()
   {
     _databasePath = NetvanConfig.Load().ResolvedDatabasePath;
-    var refreshSeconds = Math.Max(1, NetvanConfig.Load().SamplingIntervalSeconds);
 
     _speedFont = new Font("Segoe UI", 8f, FontStyle.Regular, GraphicsUnit.Point);
 
@@ -32,7 +30,7 @@ internal sealed class TaskbarOverlayForm : Form
     ClientSize = new Size(72, 36);
     Text = "Netvan";
 
-    _refreshTimer = new System.Windows.Forms.Timer { Interval = refreshSeconds * 1000 };
+    _refreshTimer = new System.Windows.Forms.Timer { Interval = 1000 };
     _refreshTimer.Tick += (_, _) => RefreshSpeeds();
     _refreshTimer.Start();
 

@@ -1,6 +1,4 @@
 using System.CommandLine;
-using System.Reflection;
-using Netvan.Cli;
 using Netvan.Services;
 using Netvan.Storage;
 #if WINDOWS
@@ -35,66 +33,20 @@ internal static class Program
       getDefaultValue: () => DefaultDbPath)
     { Description = "SQLite database path" };
 
-    var filterOption = new Option<string?>(
-      aliases: new[] { "--filter" },
-      description: "Optional substring filter for app names.")
-    { Arity = ArgumentArity.ZeroOrOne };
-
-    var usage = new Command("usage", "Upload, download, and total bytes in a time range");
-    var usageOpts = CreateUsageOptions();
-    RegisterUsageHandler(usage, usageOpts);
-
-    var info = new Command("info", "Database path, coverage, and version")
-    {
-      dbOption,
-    };
-    info.SetHandler(RunInfo, dbOption);
-
-    var appsList = new Command("list", "List application names seen in the database")
-    {
-      filterOption,
-      dbOption,
-    };
-    appsList.SetHandler(RunAppsList, filterOption, dbOption);
-
-    var apps = new Command("apps", "Application names from collected traffic")
-    {
-      appsList,
-    };
-
-    var rt = new Command("rt", "Real-time usage table by app with daily/weekly/monthly totals")
-    {
-      dbOption,
-    };
-    rt.SetHandler(RunRealtime, dbOption);
-
     var reset = new Command("reset", "Remove the traffic database and restart the service (clears in-memory counters)");
     reset.SetHandler(() => RunReset());
 
-    var root = new RootCommand("Windows TCP usage monitor (netvan)")
+    var root = new RootCommand("Netvan Windows TCP usage monitor")
     {
       reset,
-      info,
-      usage,
-      apps,
-      rt,
     };
 
 #if WINDOWS
-    var intervalOption = new Option<int>(
-      aliases: new[] { "--interval", "-i" },
-      getDefaultValue: () => 5,
-      description: "Sampling interval in seconds.")
-    {
-      Arity = ArgumentArity.ZeroOrOne,
-    };
-
     var serviceInstall = new Command("install", "Install the Netvan Windows service (Administrator required)")
     {
       dbOption,
-      intervalOption,
     };
-    serviceInstall.SetHandler(RunServiceInstall, dbOption, intervalOption);
+    serviceInstall.SetHandler(RunServiceInstall, dbOption);
 
     var serviceUninstall = new Command("uninstall", "Remove the Netvan Windows service (Administrator required)");
     serviceUninstall.SetHandler(RunServiceUninstall);
@@ -148,88 +100,41 @@ internal static class Program
     args.Length >= 2
     && args[0].Equals("taskbar", StringComparison.OrdinalIgnoreCase)
     && args[1].Equals("run", StringComparison.OrdinalIgnoreCase);
-#endif
 
-  private sealed record UsageOptions(
-    Option<string?> Target,
-    Option<string?> From,
-    Option<string?> To,
-    Option<string> IncludePrivate,
-    Option<string> Db);
-
-  private static UsageOptions CreateUsageOptions()
-  {
-    return new UsageOptions(
-      new Option<string?>(
-        aliases: new[] { "--target" },
-        description: "apps | ip | host | <app-name> | <x.x.x.x> | <hostname>. Omit for all apps combined.")
-      { Arity = ArgumentArity.ZeroOrOne },
-      new Option<string?>(
-        aliases: new[] { "--from-datetime" },
-        description: $"Start of range (local). Format {CompactDateTime.Format}. Date-only yyMMdd uses T0000.")
-      { Arity = ArgumentArity.ZeroOrOne },
-      new Option<string?>(
-        aliases: new[] { "--to-datetime" },
-        description: $"End of range (local), inclusive. Format {CompactDateTime.Format}. Default: now.")
-      { Arity = ArgumentArity.ZeroOrOne },
-      new Option<string>(
-        aliases: new[] { "--include-private" },
-        getDefaultValue: () => "no",
-        description: "Include private/local IP traffic: yes | no (default: no).")
-      { Arity = ArgumentArity.ZeroOrOne },
-      new Option<string>(
-        aliases: new[] { "--db", "-d" },
-        getDefaultValue: () => DefaultDbPath)
-      { Description = "SQLite database path" });
-  }
-
-  private static void RegisterUsageHandler(Command command, UsageOptions options)
-  {
-    command.AddOption(options.Target);
-    command.AddOption(options.From);
-    command.AddOption(options.To);
-    command.AddOption(options.IncludePrivate);
-    command.AddOption(options.Db);
-    command.SetHandler(
-      (target, from, to, includePrivate, db) => RunUsage(target, from, to, includePrivate, db),
-      options.Target, options.From, options.To, options.IncludePrivate, options.Db);
-  }
-
-#if WINDOWS
-  private static void RunServiceInstall(string dbPath, int intervalSeconds)
+  private static void RunServiceInstall(string dbPath)
   {
     var exePath = Environment.ProcessPath;
     if (string.IsNullOrWhiteSpace(exePath))
     {
-      ConsoleUi.WriteError("Could not resolve the current executable path.");
+      ConsoleOutput.WriteError("Could not resolve the current executable path.");
       Environment.Exit(1);
       return;
     }
 
     dbPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(dbPath));
-    var code = WindowsServiceManager.Install(exePath, intervalSeconds, dbPath, out var message);
-    ConsoleUi.WriteServiceResult(code, message);
+    var code = WindowsServiceManager.Install(exePath, dbPath, out var message);
+    ConsoleOutput.WriteServiceResult(code, message);
     Environment.Exit(code);
   }
 
   private static void RunServiceUninstall()
   {
     var code = WindowsServiceManager.Uninstall(out var message);
-    ConsoleUi.WriteServiceResult(code, message);
+    ConsoleOutput.WriteServiceResult(code, message);
     Environment.Exit(code);
   }
 
   private static void RunServiceStart()
   {
     var code = WindowsServiceManager.Start(out var message);
-    ConsoleUi.WriteServiceResult(code, message);
+    ConsoleOutput.WriteServiceResult(code, message);
     Environment.Exit(code);
   }
 
   private static void RunServiceStop()
   {
     var code = WindowsServiceManager.Stop(out var message);
-    ConsoleUi.WriteServiceResult(code, message);
+    ConsoleOutput.WriteServiceResult(code, message);
     Environment.Exit(code);
   }
 
@@ -237,7 +142,7 @@ internal static class Program
   {
     if (!WindowsServiceManager.IsInstalled())
     {
-      ConsoleUi.RenderServiceStatus(
+      ConsoleOutput.RenderServiceStatus(
         installed: false,
         WindowsServiceManager.ServiceName,
         null,
@@ -246,7 +151,7 @@ internal static class Program
     }
 
     var status = WindowsServiceManager.GetStatus();
-    ConsoleUi.RenderServiceStatus(
+    ConsoleOutput.RenderServiceStatus(
       installed: true,
       WindowsServiceManager.ServiceName,
       WindowsServiceManager.DisplayName,
@@ -266,21 +171,31 @@ internal static class Program
       var stopCode = WindowsServiceManager.Stop(out var stopMessage);
       if (stopCode != 0)
       {
-        ConsoleUi.WriteError(stopMessage);
+        ConsoleOutput.WriteError(stopMessage);
         return stopCode;
       }
 
-      ConsoleUi.WriteNote("Netvan service stopped for reset.");
+      ConsoleOutput.WriteNote("Netvan service stopped for reset.");
     }
 #else
     const bool restartService = false;
 #endif
 
-    var removed = TrafficDatabase.DeleteFiles(dbPath);
-    if (removed)
-      ConsoleUi.WriteSuccess($"Removed database at {dbPath}.");
+    if (!TrafficDatabase.TryDeleteFiles(dbPath, out var deleteError))
+    {
+      ConsoleOutput.WriteError(deleteError ?? "Could not delete the database.");
+      ConsoleOutput.WriteNote("Close the Netvan GUI, taskbar widget, and any other program using traffic.db, then retry.");
+#if WINDOWS
+      if (restartService)
+        WindowsServiceManager.Start(out _);
+#endif
+      return 1;
+    }
+
+    if (File.Exists(dbPath))
+      ConsoleOutput.WriteNote($"No database file at {dbPath} (already empty).");
     else
-      ConsoleUi.WriteNote($"No database file at {dbPath} (already empty).");
+      ConsoleOutput.WriteSuccess($"Removed database at {dbPath}.");
 
 #if WINDOWS
     if (restartService)
@@ -288,183 +203,16 @@ internal static class Program
       var startCode = WindowsServiceManager.Start(out var startMessage);
       if (startCode != 0)
       {
-        ConsoleUi.WriteError(startMessage);
+        ConsoleOutput.WriteError(startMessage);
         return startCode;
       }
 
-      ConsoleUi.WriteSuccess("Netvan service restarted with a fresh database and in-memory counters.");
+      ConsoleOutput.WriteSuccess("Netvan service restarted with a fresh database and in-memory counters.");
       return 0;
     }
 #endif
 
-    ConsoleUi.WriteNote("Service was not running; start it with netvan service start when ready.");
+    ConsoleOutput.WriteNote("Service was not running; start it with netvan service start when ready.");
     return 0;
   }
-
-  private static void RunInfo(string dbPath)
-  {
-    using var store = new TrafficStore(dbPath);
-    var info = store.GetDatabaseInfo(dbPath);
-    var version = Assembly.GetExecutingAssembly().GetName().Version?.ToString() ?? "unknown";
-
-#if WINDOWS
-    if (Environment.GetEnvironmentVariable("NETVAN_DEBUG") == "1")
-      Native.IpHelperApi.PrintStatsDiagnostics();
-#endif
-
-    ConsoleUi.RenderInfo(version, info, CompactDateTime.Format);
-  }
-
-  private static void RunAppsList(string? filter, string dbPath)
-  {
-    using var store = new TrafficStore(dbPath);
-    var apps = store.ListAppNames(filter);
-    ConsoleUi.RenderAppsList(apps, filter);
-  }
-
-  private static void RunUsage(
-    string? targetRaw,
-    string? fromRaw,
-    string? toRaw,
-    string includePrivateRaw,
-    string dbPath)
-  {
-    var target = UsageTarget.Parse(targetRaw);
-    var includePrivate = ParseIncludePrivate(includePrivateRaw);
-    var (fromUtc, toUtc) = CompactDateTime.ResolveRangeUtc(fromRaw, toRaw);
-
-    using var store = new TrafficStore(dbPath);
-    var targetLabel = DescribeTarget(target);
-    ConsoleUi.RenderUsageContext(fromUtc, toUtc, targetLabel, includePrivate);
-
-    switch (target.Kind)
-    {
-      case UsageTargetKind.Apps:
-        ConsoleUi.RenderAppUsageTable(store.UsageByAppInRangeUtc(fromUtc, toUtc, includePrivate));
-        break;
-      case UsageTargetKind.IpTop100:
-        ConsoleUi.RenderIpUsageTable(store.UsageByIpInRangeUtc(fromUtc, toUtc, includePrivate, QueryFilters.TopUsageLimit));
-        break;
-      case UsageTargetKind.HostTop100:
-        ConsoleUi.RenderHostUsageTable(store.UsageByHostInRangeUtc(fromUtc, toUtc, includePrivate, QueryFilters.TopUsageLimit));
-        break;
-      default:
-        var totals = store.UsageTotalsInRangeUtc(fromUtc, toUtc, target, includePrivate);
-        ConsoleUi.RenderUsageTotals(totals.BytesSent, totals.BytesReceived);
-        break;
-    }
-  }
-
-  private static string DescribeTarget(UsageTarget target) =>
-    target.Kind switch
-    {
-      UsageTargetKind.All => "all apps",
-      UsageTargetKind.Apps => "apps",
-      UsageTargetKind.IpTop100 => "ip (top 100)",
-      UsageTargetKind.HostTop100 => "host (top 100)",
-      _ => target.Value ?? "",
-    };
-
-  private static void RunRealtime(string dbPath)
-  {
-    dbPath = Path.GetFullPath(Environment.ExpandEnvironmentVariables(dbPath));
-    var refreshSeconds = Math.Max(1, NetvanConfig.Load().SamplingIntervalSeconds);
-    var refreshInterval = TimeSpan.FromSeconds(refreshSeconds);
-
-    using var cts = new CancellationTokenSource();
-    Console.CancelKeyPress += (_, e) =>
-    {
-      e.Cancel = true;
-      cts.Cancel();
-    };
-
-    ConsoleUi.RunRealtimeLive(() => LoadRealtimeSnapshot(dbPath, refreshSeconds), refreshInterval, cts.Token);
-  }
-
-  private static ConsoleUi.RealtimeViewModel LoadRealtimeSnapshot(string dbPath, int refreshIntervalSeconds)
-  {
-    var nowLocal = DateTime.Now;
-    var dailyStartLocal = nowLocal.Date;
-    var weeklyStartLocal = StartOfCurrentWeekSaturday(nowLocal);
-    var monthlyStartLocal = new DateTime(nowLocal.Year, nowLocal.Month, 1, 0, 0, 0, DateTimeKind.Local);
-
-    var nowUtc = TrafficStore.FormatBucketUtc(nowLocal.ToUniversalTime());
-    var dailyUtc = dailyStartLocal.ToUniversalTime().ToString("O");
-    var weeklyUtc = weeklyStartLocal.ToUniversalTime().ToString("O");
-    var monthlyUtc = monthlyStartLocal.ToUniversalTime().ToString("O");
-
-    using var store = new TrafficStore(dbPath);
-    var currentRows = store.UsageByAppInRangeUtc(nowUtc, nowUtc, includePrivate: true)
-      .ToDictionary(x => NormalizeAppName(x.AppName), x => x, StringComparer.OrdinalIgnoreCase);
-    var dailyRows = store.UsageByAppInRangeUtc(dailyUtc, nowUtc, includePrivate: true)
-      .ToDictionary(x => NormalizeAppName(x.AppName), x => x, StringComparer.OrdinalIgnoreCase);
-    var weeklyRows = store.UsageByAppInRangeUtc(weeklyUtc, nowUtc, includePrivate: true)
-      .ToDictionary(x => NormalizeAppName(x.AppName), x => x, StringComparer.OrdinalIgnoreCase);
-    var monthlyRows = store.UsageByAppInRangeUtc(monthlyUtc, nowUtc, includePrivate: true)
-      .ToDictionary(x => NormalizeAppName(x.AppName), x => x, StringComparer.OrdinalIgnoreCase);
-
-    var apps = currentRows.Keys
-      .Concat(dailyRows.Keys)
-      .Concat(weeklyRows.Keys)
-      .Concat(monthlyRows.Keys)
-      .Distinct(StringComparer.OrdinalIgnoreCase)
-      .OrderBy(x => x, StringComparer.OrdinalIgnoreCase)
-      .ToList();
-
-    var rows = new List<ConsoleUi.RealtimeUsageRow>();
-    foreach (var app in apps)
-    {
-      currentRows.TryGetValue(app, out var current);
-      dailyRows.TryGetValue(app, out var daily);
-      weeklyRows.TryGetValue(app, out var weekly);
-      monthlyRows.TryGetValue(app, out var monthly);
-
-      rows.Add(new ConsoleUi.RealtimeUsageRow(
-        app,
-        current.BytesReceived,
-        current.BytesSent,
-        daily.BytesReceived,
-        daily.BytesSent,
-        weekly.BytesReceived,
-        weekly.BytesSent,
-        monthly.BytesReceived,
-        monthly.BytesSent));
-    }
-
-    return new ConsoleUi.RealtimeViewModel(
-      dailyStartLocal,
-      weeklyStartLocal,
-      monthlyStartLocal,
-      nowLocal,
-      refreshIntervalSeconds,
-      rows);
-  }
-
-  private static bool ParseIncludePrivate(string raw)
-  {
-    if (raw.Equals("yes", StringComparison.OrdinalIgnoreCase) || raw.Equals("true", StringComparison.OrdinalIgnoreCase) || raw == "1")
-      return true;
-    if (raw.Equals("no", StringComparison.OrdinalIgnoreCase) || raw.Equals("false", StringComparison.OrdinalIgnoreCase) || raw == "0")
-      return false;
-
-    ConsoleUi.WriteError($"Invalid --include-private '{raw}'. Use yes or no.");
-    Environment.Exit(1);
-    return false;
-  }
-
-  private static DateTime StartOfCurrentWeekSaturday(DateTime localNow)
-  {
-    var date = localNow.Date;
-    while (date.DayOfWeek != DayOfWeek.Saturday)
-      date = date.AddDays(-1);
-    return DateTime.SpecifyKind(date, DateTimeKind.Local);
-  }
-
-  private static string NormalizeAppName(string appName)
-  {
-    var name = Path.GetFileName(appName);
-    var dot = name.LastIndexOf('.');
-    return dot > 0 ? name[..dot] : name;
-  }
-
 }

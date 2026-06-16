@@ -1,6 +1,6 @@
 # Netvan (`netvan`)
 
-A **Windows** console application that tracks **TCP** network usage over time: which applications send and receive data, which remote IPs and hostnames they talk to, and which network adapter (NIC) carries the traffic. Samples are stored in a local **SQLite** database. Traffic is collected by the Netvan Windows service; query history with `netvan usage`, `netvan apps list`, and `netvan rt`.
+A **Windows** application that tracks **TCP** network usage over time: which applications send and receive data, which remote IPs and hostnames they talk to, and which network adapter (NIC) carries the traffic. Samples are stored in a local **SQLite** database. Traffic is collected by the Netvan Windows service; view and query history in the **Electron GUI**.
 
 ## Installation
 
@@ -27,58 +27,19 @@ The installer will:
 - Install and start the Netvan Windows service by default when run as Administrator
 
 After installation, you can use:
-- `netvan` command directly in PowerShell
+- `netvan` to launch the GUI (no arguments)
+- `netvan service` to manage the Windows service
 - `sqlite3.exe` to manage the database directly
 - `$env:NETVAN_HOME` to access the installation directory
 
 ## Commands
 
-Only these subcommands are exposed:
-
 | Command | Purpose |
 |---------|---------|
+| `netvan` | Launch the Netvan GUI |
 | `netvan service` | Install/start/stop the Netvan Windows service (required for collection) |
 | `netvan reset` | Remove the traffic database and restart the service (fresh in-memory counters) |
-| `netvan info` | Database path, row counts, time coverage, version |
-| `netvan usage` | Upload, download, and total bytes in a time range |
-| `netvan apps list` | Application names seen in the database |
-| `netvan rt` | Real-time usage table by app |
-
-### Options (usage)
-
-| Option | Default | Description |
-|--------|---------|-------------|
-| `--target` | *(omit)* | What to measure (see targets below) |
-| `--from-datetime` | today `T0000` | Range start (local) |
-| `--to-datetime` | now | Range end (local), inclusive |
-| `--include-private` | `no` | `yes` to include RFC1918/link-local traffic |
-| `--db` / `-d` | `%LocalAppData%\Netvan\traffic.db` (from `configs.toml`) | SQLite path |
-
-### Datetime format
-
-Local time in compact form: **`yyMMddTHHmm`** (example: `260515T1430` = 2026-05-15 14:30).
-
-- Omit the time portion (`yyMMdd` only) → **`T0000`** (midnight).
-- `260515T` with no digits after `T` → **`T0000`**.
-
-### `--target` values
-
-| Target | Behavior |
-|--------|----------|
-| *(not set)* | Combined totals for **all apps** |
-| `apps` | Breakdown by application (all apps, sorted by usage) |
-| `ip` | Top **100** remote IPs by usage |
-| `host` | Top **100** hostnames by usage |
-| `<app>` | One process name, e.g. `telegram` |
-| `<x.x.x.x>` | One remote IP |
-| `<hostname>` | One host, e.g. `example.com` or `sub.example.com` |
-
-### `apps list`
-
-```powershell
-netvan apps list
-netvan apps list --filter=chrom
-```
+| `netvan taskbar` | Enable/disable the taskbar upload/download speed widget |
 
 ## Configuration
 
@@ -86,7 +47,7 @@ Configuration lives in `%NETVAN_HOME%\configs.toml` (or `%LocalAppData%\Netvan\c
 
 | Setting | Default | Description |
 |---------|---------|-------------|
-| `monitoring.sampling_interval` | `1` | Seconds between TCP samples |
+| `monitoring.disable_vpn_tracking` | `false` | Exclude traffic on VPN adapters from collection |
 | `storage.retention_days` | `30` | Delete usage rows older than this |
 | `storage.max_size_mb` | `500` | Prune when the database file exceeds this size |
 
@@ -95,16 +56,11 @@ Logs: `%NETVAN_HOME%\netvan.log` (see `logging.log_file` in config).
 ## Examples
 
 ```powershell
+netvan
 netvan service status
-netvan info
-
-netvan usage
-netvan usage --from-datetime=260515 --to-datetime=260515T2359
-netvan usage --target=apps --from-datetime=260515T0900
-netvan usage --target=ip --include-private=no
-netvan usage --target=telegram --from-datetime=260514T0000
-
-netvan apps list --filter=edge
+netvan service start
+netvan reset
+netvan taskbar enable
 ```
 
 ## Data collection
@@ -133,9 +89,7 @@ netvan service uninstall
 
 The service runs `netvan run` internally. Logs are written to the Windows Event Log (source **Netvan**).
 
-Query traffic in any terminal: `netvan usage`, `netvan apps list`, `netvan rt`.
-
-Default database: `%LocalAppData%\Netvan\traffic.db` (override with `--db` on `service install` or `NETVAN_HOME`).
+Use the GUI for live views, usage queries, and database info. Default database: `%LocalAppData%\Netvan\traffic.db` (override with `--db` on `service install` or `NETVAN_HOME`).
 
 ## Quick start
 
@@ -146,8 +100,7 @@ cd network-monitoring
 .\netvan-core\export.ps1 -SetEnvVars
 # Restart terminal, then:
 netvan service status
-netvan info
-netvan usage --target=apps
+netvan
 ```
 
 ## Requirements
@@ -160,10 +113,10 @@ netvan usage --target=apps
 
 | Topic | Behavior |
 |-------|----------|
-| **Protocol** | **TCP only** (IPv4 and IPv6). UDP and QUIC-only flows are not counted. |
+| **Protocol** | **TCP over IPv4 only**. |
 | **Byte type** | Application **TCP payload** bytes per connection, not full Ethernet frames. |
 | **Hostnames** | From **reverse DNS** on the remote IP, not TLS SNI or HTTP Host. |
-| **Private IPs** | Excluded by default (`--include-private=no`). |
+| **Private IPs** | Excluded by default in GUI queries. |
 
 ## Build
 
@@ -174,20 +127,19 @@ dotnet build netvan-core\Netvan.csproj -c Release
 To publish a self-contained Windows executable:
 
 ```powershell
-dotnet publish netvan-core\Netvan.csproj -c Release -f net9.0-windows -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o .\publish
+dotnet publish netvan-core\Netvan.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true -o .\publish
 ```
 
 ## Project layout
 
 | Path | Role |
 |------|------|
-| `netvan-core/` | C# CLI source, build scripts, and `export.ps1` |
+| `netvan-core/` | C# service host, build scripts, and `export.ps1` |
 | `netvan-gui/` | Electron GUI (`start-gui.ps1`) |
 | `netvan/` | Published binaries ready to use (output of `export.ps1`) |
-| `netvan-core/Program.cs` | CLI (`service`, `reset`, `info`, `usage`, `apps`, `rt`) |
+| `netvan-core/Program.cs` | Entry point (`service`, `reset`, `taskbar`, GUI launcher) |
 | `netvan-core/Services/CollectionLoop.cs` | Background sampling loop |
 | `netvan-core/Services/` | Windows service host and traffic collection |
-| `netvan-core/Cli/` | Target parsing and datetime helpers |
 | `netvan-core/Services/TrafficCollector.cs` | TCP sampling and deltas |
 | `netvan-core/Storage/TrafficStore.cs` | SQLite schema and queries |
 

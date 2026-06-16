@@ -6,8 +6,7 @@ param(
     [string]$InstallDir,
     [switch]$AddToPath,
     [switch]$SetEnvVars,
-    [switch]$SkipService,
-    [int]$ServiceInterval = 1
+    [switch]$SkipService
 )
 
 $ErrorActionPreference = "Stop"
@@ -487,8 +486,6 @@ database_path = "%NETVAN_HOME%\\traffic.db"
 [monitoring]
 # Enable/disable monitoring
 enabled = true
-# Sampling interval in seconds
-sampling_interval = 1
 
 # Storage settings
 [storage]
@@ -862,8 +859,8 @@ if (-not $SkipService) {
     }
 
     $DbPath = Join-Path $InstallDir "traffic.db"
-    Write-Info "Installing Netvan Windows service (interval ${ServiceInterval}s)..."
-    & $NetvanExe service install --db $DbPath --interval $ServiceInterval
+    Write-Info "Installing Netvan Windows service..."
+    & $NetvanExe service install --db $DbPath
     if ($LASTEXITCODE -ne 0) {
         Write-Error-Exit "netvan service install failed with exit code $LASTEXITCODE"
     }
@@ -892,7 +889,7 @@ if (Test-Path $NetvanExe) {
         Write-Info "  - configs.toml (Configuration file)"
     }
     Write-Info ""
-    Write-Info "Run 'netvan info' to verify the installation"
+    Write-Info "Run 'netvan' to launch the GUI, or 'netvan service status' to verify the service"
     Write-Info "export.ps1 installs the Windows service by default (elevated). Use -SkipService to install binaries only."
     Write-Info "Use 'sqlite3.exe' to manage the SQLite database directly"
 }

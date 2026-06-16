@@ -39,12 +39,8 @@ internal sealed class CollectorHostedService : BackgroundService
     {
 
         _logger.LogInformation(
-
-            "Netvan collector started. Database={DatabasePath}, interval={IntervalSeconds}s",
-
-            _config.ResolvedDatabasePath,
-
-            _config.SamplingIntervalSeconds);
+            "Netvan collector started. Database={DatabasePath}",
+            _config.ResolvedDatabasePath);
 
 
 

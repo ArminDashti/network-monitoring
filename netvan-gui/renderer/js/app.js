@@ -1,4 +1,28 @@
 const K = 1024;
+const LIVE_HISTORY_MAX = 90;
+const LIVE_APP_CHART_LIMIT = 8;
+const LIVE_APP_HISTORY_MAX = 60;
+
+const APP_CHART_PALETTE = [
+  '#60cdff',
+  '#6ccb5f',
+  '#ff9f43',
+  '#a78bfa',
+  '#f472b6',
+  '#34d399',
+  '#fbbf24',
+  '#38bdf8',
+];
+
+const CHART_COLORS = {
+  download: '#6ccb5f',
+  downloadDim: 'rgba(108, 203, 95, 0.18)',
+  upload: '#ff6b6b',
+  uploadDim: 'rgba(255, 107, 107, 0.18)',
+  grid: 'rgba(255, 255, 255, 0.06)',
+  axis: 'rgba(255, 255, 255, 0.38)',
+  label: 'rgba(255, 255, 255, 0.55)',
+};
 
 function formatBytes(value) {
   let n = Math.max(0, Number(value) || 0);
@@ -17,6 +41,15 @@ function formatSpeed(bytesPerSecond) {
   return `${kbps.toFixed(0)} Kb/s`;
 }
 
+function formatChartSpeed(bytesPerSecond) {
+  const mbps = (Math.max(0, bytesPerSecond) * 8) / (K * K);
+  if (mbps >= 1000) return `${(mbps / 1000).toFixed(1)} Gb/s`;
+  if (mbps >= 1) return `${mbps.toFixed(1)} Mb/s`;
+  const kbps = (Math.max(0, bytesPerSecond) * 8) / K;
+  if (kbps >= 100) return `${kbps.toFixed(0)} Kb/s`;
+  return `${kbps.toFixed(1)} Kb/s`;
+}
+
 const PERIOD_MB_PRECISION_THRESHOLD = 100;
 
 function formatPeriodBytes(bytes) {
@@ -33,20 +66,35 @@ function formatPeriodBytes(bytes) {
     : `${gb.toFixed(1)} GB`;
 }
 
-function formatDownUpPair(downBytes, upBytes) {
-  return `<span class="val-down">${formatPeriodBytes(downBytes)}</span> / <span class="val-up">${formatPeriodBytes(upBytes)}</span>`;
-}
-
 function formatLocal(iso) {
   if (!iso) return '—';
   return new Date(iso).toLocaleString();
 }
 
-function formatLocalShort(iso) {
-  if (!iso) return '—';
-  const d = new Date(iso);
-  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' })
-    + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+function formatDateLocal(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+}
+
+function formatTimeLocal(date) {
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function setUsageDateTime(prefix, date) {
+  document.getElementById(`${prefix}-date`).value = formatDateLocal(date);
+  document.getElementById(`${prefix}-time`).value = formatTimeLocal(date);
+}
+
+function readUsageDateTime(prefix) {
+  const date = document.getElementById(`${prefix}-date`).value.trim();
+  const time = document.getElementById(`${prefix}-time`).value.trim();
+  if (!date || !time) return null;
+  return `${date}T${time}`;
+}
+
+function startOfDayLocal(now) {
+  return new Date(now.getFullYear(), now.getMonth(), now.getDate());
 }
 
 function showToast(message, isError = false) {
@@ -64,9 +112,17 @@ function stripAnsi(text) {
 
 let config = null;
 let liveTimer = null;
+let liveRefreshGeneration = 0;
 let currentView = 'live';
 let liveRows = [];
-let liveSort = { column: 'currentDownBytes', dir: 'desc' };
+let liveHistory = [];
+let liveAppHistory = new Map();
+let liveChartsBound = false;
+
+const liveCharts = {
+  main: { canvas: null, ctx: null, empty: null, updated: null },
+  app: { canvas: null, ctx: null, empty: null },
+};
 
 async function init() {
   bindWindowControls();
@@ -75,14 +131,16 @@ async function init() {
   bindServiceControls();
   bindAppsFilter();
   bindSettingsControls();
-  bindLiveTableSort();
+  bindLiveCharts();
+  initUsageDateDefaults();
 
   try {
     config = await window.netvanApi.getConfig();
   } catch {
-    config = { samplingInterval: 1 };
+    config = {};
   }
 
+  await loadSettings();
   await refreshLive();
   startLivePolling();
   await loadApps('');
@@ -108,103 +166,373 @@ function bindNavigation() {
       document.getElementById(`view-${view}`).classList.add('view-active');
       currentView = view;
 
-      if (view === 'service') await refreshServiceStatus();
-      if (view === 'settings') await loadSettings();
+      if (view === 'settings') {
+        await loadSettings();
+        await refreshServiceStatus();
+      }
       if (view === 'about') await loadAbout();
       if (view === 'apps') await loadApps(document.getElementById('apps-filter').value);
+      if (view === 'live') {
+        resizeLiveCharts();
+        renderLiveCharts();
+      }
     });
   });
 }
 
+function initUsageDateDefaults() {
+  const now = new Date();
+  const fromDate = startOfDayLocal(now);
+  if (!document.getElementById('usage-from-date').value) setUsageDateTime('usage-from', fromDate);
+  if (!document.getElementById('usage-to-date').value) setUsageDateTime('usage-to', now);
+}
+
 function startLivePolling() {
-  const intervalMs = Math.max(1000, (config?.samplingInterval || 1) * 1000);
+  const intervalMs = 1000;
   if (liveTimer) clearInterval(liveTimer);
   liveTimer = setInterval(refreshLive, intervalMs);
 }
 
-function bindLiveTableSort() {
-  document.querySelectorAll('#live-table th.sortable').forEach((th) => {
-    th.addEventListener('click', () => {
-      const column = th.dataset.sort;
-      if (liveSort.column === column) {
-        liveSort.dir = liveSort.dir === 'asc' ? 'desc' : 'asc';
-      } else {
-        liveSort = { column, dir: 'desc' };
+function bindLiveCharts() {
+  if (liveChartsBound) return;
+  liveChartsBound = true;
+
+  liveCharts.main.canvas = document.getElementById('live-main-chart');
+  liveCharts.main.ctx = liveCharts.main.canvas.getContext('2d');
+  liveCharts.main.empty = document.getElementById('live-main-empty');
+  liveCharts.main.updated = document.getElementById('live-chart-updated');
+
+  liveCharts.app.canvas = document.getElementById('live-app-chart');
+  liveCharts.app.ctx = liveCharts.app.canvas.getContext('2d');
+  liveCharts.app.empty = document.getElementById('live-app-empty');
+
+  let resizeTimer;
+  window.addEventListener('resize', () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => {
+      if (currentView === 'live') {
+        resizeLiveCharts();
+        renderLiveCharts();
       }
-      updateLiveSortHeaders();
-      renderLiveTable();
-    });
+    }, 120);
   });
 }
 
-function updateLiveSortHeaders() {
-  document.querySelectorAll('#live-table th.sortable').forEach((th) => {
-    th.classList.remove('sorted-asc', 'sorted-desc');
-    if (th.dataset.sort === liveSort.column) {
-      th.classList.add(liveSort.dir === 'asc' ? 'sorted-asc' : 'sorted-desc');
-    }
+function resizeLiveCharts() {
+  [liveCharts.main, liveCharts.app].forEach((chart) => {
+    if (!chart.canvas) return;
+    const panel = chart.canvas.parentElement;
+    const width = Math.max(280, panel.clientWidth);
+    const height = Math.max(140, panel.clientHeight);
+    const dpr = window.devicePixelRatio || 1;
+    chart.canvas.width = Math.floor(width * dpr);
+    chart.canvas.height = Math.floor(height * dpr);
+    chart.canvas.style.width = `${width}px`;
+    chart.canvas.style.height = `${height}px`;
+    chart.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    chart.width = width;
+    chart.height = height;
   });
 }
 
-function compareLiveRows(a, b) {
-  const { column, dir } = liveSort;
-  const mul = dir === 'asc' ? 1 : -1;
-  if (column === 'appName') {
-    return mul * a.appName.localeCompare(b.appName, undefined, { sensitivity: 'base' });
+function pushLiveAppHistory(rows) {
+  const activeRows = rows
+    .filter((row) => row.currentDownBytes > 0 || row.currentUpBytes > 0)
+    .sort((a, b) => (b.currentDownBytes + b.currentUpBytes) - (a.currentDownBytes + a.currentUpBytes))
+    .slice(0, LIVE_APP_CHART_LIMIT);
+
+  const activeNames = new Set(activeRows.map((row) => row.appName));
+  for (const row of activeRows) {
+    const total = row.currentDownBytes + row.currentUpBytes;
+    const history = liveAppHistory.get(row.appName) || [];
+    history.push({ total, down: row.currentDownBytes, up: row.currentUpBytes });
+    if (history.length > LIVE_APP_HISTORY_MAX) history.shift();
+    liveAppHistory.set(row.appName, history);
   }
-  return mul * ((a[column] || 0) - (b[column] || 0));
+
+  for (const name of [...liveAppHistory.keys()]) {
+    if (!activeNames.has(name)) {
+      const history = liveAppHistory.get(name);
+      history.push({ total: 0, down: 0, up: 0 });
+      if (history.length > LIVE_APP_HISTORY_MAX) history.shift();
+      if (history.every((point) => point.total === 0)) liveAppHistory.delete(name);
+    }
+  }
 }
 
-function renderLiveTable() {
-  const tbody = document.getElementById('live-tbody');
-  if (!liveRows.length) {
-    tbody.innerHTML = '<tr><td colspan="6" class="empty-state">No traffic recorded yet. Ensure the Netvan service is running.</td></tr>';
+function getLiveAppSeries() {
+  return [...liveAppHistory.entries()]
+    .map(([appName, history]) => ({
+      appName,
+      history,
+      latest: history[history.length - 1]?.total || 0,
+    }))
+    .filter((series) => series.latest > 0 || series.history.some((point) => point.total > 0))
+    .sort((a, b) => b.latest - a.latest)
+    .slice(0, LIVE_APP_CHART_LIMIT);
+}
+
+function pushLiveHistory(downBytes, upBytes) {
+  liveHistory.push({
+    down: Math.max(0, downBytes),
+    up: Math.max(0, upBytes),
+    at: Date.now(),
+  });
+  if (liveHistory.length > LIVE_HISTORY_MAX) {
+    liveHistory = liveHistory.slice(-LIVE_HISTORY_MAX);
+  }
+}
+
+function renderLiveCharts() {
+  renderMainThroughputChart();
+  renderAppBreakdownChart();
+}
+
+function renderMainThroughputChart() {
+  const { ctx, width, height, empty, updated, canvas } = liveCharts.main;
+  if (!ctx || !width) return;
+
+  ctx.clearRect(0, 0, width, height);
+
+  const hasData = liveHistory.some((p) => p.down > 0 || p.up > 0);
+  empty.hidden = hasData;
+  canvas.hidden = !hasData;
+  if (!hasData) {
+    if (updated) updated.textContent = '—';
     return;
   }
 
-  const sorted = [...liveRows].sort(compareLiveRows);
-  tbody.innerHTML = sorted.map((row) => `
-    <tr>
-      <td><span class="app-name">${escapeHtml(row.appName)}</span></td>
-      <td class="num val-down">${formatSpeed(row.currentDownBytes)}</td>
-      <td class="num val-up">${formatSpeed(row.currentUpBytes)}</td>
-      <td class="num">${formatDownUpPair(row.dailyDownBytes, row.dailyUpBytes)}</td>
-      <td class="num">${formatDownUpPair(row.weeklyDownBytes, row.weeklyUpBytes)}</td>
-      <td class="num">${formatDownUpPair(row.monthlyDownBytes, row.monthlyUpBytes)}</td>
-    </tr>
-  `).join('');
+  const padding = { top: 14, right: 16, bottom: 28, left: 52 };
+  const plotW = width - padding.left - padding.right;
+  const plotH = height - padding.top - padding.bottom;
+  const maxVal = Math.max(
+    1,
+    ...liveHistory.map((p) => Math.max(p.down, p.up)),
+  );
+
+  for (let i = 0; i <= 4; i += 1) {
+    const y = padding.top + (plotH * i) / 4;
+    ctx.strokeStyle = CHART_COLORS.grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(width - padding.right, y);
+    ctx.stroke();
+
+    const value = maxVal * (1 - i / 4);
+    ctx.fillStyle = CHART_COLORS.label;
+    ctx.font = '11px Segoe UI, system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(formatChartSpeed(value), padding.left - 8, y);
+  }
+
+  const points = liveHistory.length;
+  const xAt = (index) => padding.left + (plotW * index) / Math.max(1, points - 1);
+
+  function drawSeries(key, color, fillColor) {
+    ctx.beginPath();
+    liveHistory.forEach((point, index) => {
+      const x = xAt(index);
+      const y = padding.top + plotH - (point[key] / maxVal) * plotH;
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.lineTo(xAt(points - 1), padding.top + plotH);
+    ctx.lineTo(xAt(0), padding.top + plotH);
+    ctx.closePath();
+    ctx.fillStyle = fillColor;
+    ctx.fill();
+
+    ctx.beginPath();
+    liveHistory.forEach((point, index) => {
+      const x = xAt(index);
+      const y = padding.top + plotH - (point[key] / maxVal) * plotH;
+      if (index === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    });
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
+    ctx.stroke();
+  }
+
+  drawSeries('down', CHART_COLORS.download, CHART_COLORS.downloadDim);
+  drawSeries('up', CHART_COLORS.upload, CHART_COLORS.uploadDim);
+
+  ctx.fillStyle = CHART_COLORS.axis;
+  ctx.font = '11px Segoe UI, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('now', width - padding.right, height - padding.bottom + 8);
+
+  if (updated) {
+    updated.textContent = `Updated ${new Date().toLocaleTimeString()}`;
+  }
+}
+
+function renderAppBreakdownChart() {
+  const { ctx, width, height, empty, canvas } = liveCharts.app;
+  if (!ctx || !width) return;
+
+  ctx.clearRect(0, 0, width, height);
+
+  const series = getLiveAppSeries();
+  const pointCount = Math.max(...series.map((s) => s.history.length), 0);
+  const hasData = series.length > 0 && pointCount > 1;
+  empty.hidden = hasData;
+  canvas.hidden = !hasData;
+  if (!hasData) return;
+
+  const legendHeight = 34;
+  const padding = { top: 12, right: 16, bottom: 28 + legendHeight, left: 52 };
+  const plotW = width - padding.left - padding.right;
+  const plotH = height - padding.top - padding.bottom;
+
+  const totals = [];
+  for (let i = 0; i < pointCount; i += 1) {
+    let sum = 0;
+    for (const item of series) {
+      sum += item.history[i]?.total || 0;
+    }
+    totals.push(sum);
+  }
+  const maxVal = Math.max(1, ...totals);
+
+  for (let i = 0; i <= 4; i += 1) {
+    const y = padding.top + (plotH * i) / 4;
+    ctx.strokeStyle = CHART_COLORS.grid;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(padding.left, y);
+    ctx.lineTo(width - padding.right, y);
+    ctx.stroke();
+
+    const value = maxVal * (1 - i / 4);
+    ctx.fillStyle = CHART_COLORS.label;
+    ctx.font = '11px Segoe UI, system-ui, sans-serif';
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(formatChartSpeed(value), padding.left - 8, y);
+  }
+
+  const xAt = (index) => padding.left + (plotW * index) / Math.max(1, pointCount - 1);
+
+  for (let s = series.length - 1; s >= 0; s -= 1) {
+    const item = series[s];
+    const color = APP_CHART_PALETTE[s % APP_CHART_PALETTE.length];
+    const fillColor = color.replace(')', ', 0.28)').replace('rgb', 'rgba').replace('#', '');
+    const rgbaFill = color.startsWith('#')
+      ? `${color}47`
+      : fillColor;
+
+    const upper = new Array(pointCount).fill(0);
+    for (let i = 0; i < pointCount; i += 1) {
+      let stack = 0;
+      for (let j = 0; j <= s; j += 1) {
+        stack += series[j].history[i]?.total || 0;
+      }
+      upper[i] = stack;
+    }
+
+    const lower = new Array(pointCount).fill(0);
+    for (let i = 0; i < pointCount; i += 1) {
+      let stack = 0;
+      for (let j = 0; j < s; j += 1) {
+        stack += series[j].history[i]?.total || 0;
+      }
+      lower[i] = stack;
+    }
+
+    ctx.beginPath();
+    for (let i = 0; i < pointCount; i += 1) {
+      const x = xAt(i);
+      const y = padding.top + plotH - (upper[i] / maxVal) * plotH;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    for (let i = pointCount - 1; i >= 0; i -= 1) {
+      const x = xAt(i);
+      const y = padding.top + plotH - (lower[i] / maxVal) * plotH;
+      ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.fillStyle = rgbaFill;
+    ctx.fill();
+
+    ctx.beginPath();
+    for (let i = 0; i < pointCount; i += 1) {
+      const x = xAt(i);
+      const y = padding.top + plotH - (upper[i] / maxVal) * plotH;
+      if (i === 0) ctx.moveTo(x, y);
+      else ctx.lineTo(x, y);
+    }
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+  }
+
+  ctx.fillStyle = CHART_COLORS.axis;
+  ctx.font = '11px Segoe UI, system-ui, sans-serif';
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText('now', width - padding.right, height - padding.bottom + 8);
+
+  const legendY = height - legendHeight + 6;
+  let legendX = padding.left;
+  ctx.textAlign = 'left';
+  ctx.textBaseline = 'middle';
+  ctx.font = '11px Segoe UI, system-ui, sans-serif';
+
+  series.forEach((item, index) => {
+    const color = APP_CHART_PALETTE[index % APP_CHART_PALETTE.length];
+    const label = item.appName.length > 16 ? `${item.appName.slice(0, 15)}…` : item.appName;
+    const speed = formatSpeed(item.latest);
+    const text = `${label} · ${speed}`;
+    const textWidth = ctx.measureText(text).width + 22;
+    if (legendX + textWidth > width - padding.right) return;
+
+    ctx.fillStyle = color;
+    ctx.fillRect(legendX, legendY + 5, 10, 10);
+    ctx.fillStyle = CHART_COLORS.label;
+    ctx.fillText(text, legendX + 14, legendY + 10);
+    legendX += textWidth + 12;
+  });
 }
 
 async function refreshLive() {
-  const statusEl = document.getElementById('live-status');
-  const tbody = document.getElementById('live-tbody');
+  const generation = ++liveRefreshGeneration;
 
   try {
     const data = await window.netvanApi.getRealtime(true);
+    if (generation !== liveRefreshGeneration) return;
 
     if (data.error) {
-      statusEl.classList.add('error');
-      statusEl.innerHTML = '<span class="status-dot"></span> Database unavailable';
-      tbody.innerHTML = `<tr><td colspan="6" class="empty-state">${escapeHtml(data.error)}</td></tr>`;
       document.getElementById('live-download').textContent = '—';
       document.getElementById('live-upload').textContent = '—';
-      document.getElementById('live-updated').textContent = '';
+      liveRows = [];
+      liveHistory = [];
+      liveAppHistory = new Map();
+      resizeLiveCharts();
+      renderLiveCharts();
       return;
     }
 
-    statusEl.classList.remove('error');
-    statusEl.innerHTML = '<span class="status-dot"></span> Live';
-
     document.getElementById('live-download').textContent = formatSpeed(data.totalDownBytes);
     document.getElementById('live-upload').textContent = formatSpeed(data.totalUpBytes);
-    document.getElementById('live-updated').textContent = `Updated ${formatLocalShort(data.nowLocal)}`;
 
-    liveRows = data.rows;
-    renderLiveTable();
-  } catch (err) {
-    statusEl.classList.add('error');
-    statusEl.innerHTML = '<span class="status-dot"></span> Error';
-    tbody.innerHTML = `<tr><td colspan="6" class="empty-state">${escapeHtml(err.message)}</td></tr>`;
+    liveRows = data.rows || [];
+    pushLiveHistory(data.totalDownBytes, data.totalUpBytes);
+    pushLiveAppHistory(liveRows);
+
+    if (currentView === 'live') {
+      resizeLiveCharts();
+      renderLiveCharts();
+    }
+  } catch {
+    if (generation !== liveRefreshGeneration) return;
+    document.getElementById('live-download').textContent = '—';
+    document.getElementById('live-upload').textContent = '—';
   }
 }
 
@@ -213,8 +541,8 @@ function bindUsageQuery() {
 }
 
 async function runUsageQuery() {
-  const fromRaw = document.getElementById('usage-from').value.trim() || null;
-  const toRaw = document.getElementById('usage-to').value.trim() || null;
+  const fromRaw = readUsageDateTime('usage-from');
+  const toRaw = readUsageDateTime('usage-to');
   const target = document.getElementById('usage-target').value;
   const includePrivate = document.getElementById('usage-private').checked;
   const resultsEl = document.getElementById('usage-results');
@@ -231,30 +559,10 @@ async function runUsageQuery() {
 
     const rangeNote = `<p class="empty-state" style="padding-top:0">Range: ${escapeHtml(formatLocal(data.fromUtc))} → ${escapeHtml(formatLocal(data.toUtc))}</p>`;
 
-    if (data.kind === 'totals') {
-      const t = data.totals;
-      resultsEl.innerHTML = rangeNote + `
-        <div class="totals-grid">
-          <div class="total-item">
-            <div class="label">Upload</div>
-            <div class="value val-up">${formatBytes(t.bytesSent)}</div>
-          </div>
-          <div class="total-item">
-            <div class="label">Download</div>
-            <div class="value val-down">${formatBytes(t.bytesReceived)}</div>
-          </div>
-          <div class="total-item">
-            <div class="label">Total</div>
-            <div class="value">${formatBytes(t.bytesSent + t.bytesReceived)}</div>
-          </div>
-        </div>`;
-      return;
-    }
-
     const columns = {
       apps: ['Application', 'app_name'],
-      ip: ['Remote IP', 'remote_ip'],
-      host: ['Host', 'host_name'],
+      ip: ['IP', 'remote_ip'],
+      host: ['Hostname', 'host_name'],
     };
     const [label, key] = columns[data.kind];
 
@@ -327,6 +635,8 @@ async function loadApps(filter) {
 function bindServiceControls() {
   document.getElementById('service-refresh').addEventListener('click', refreshServiceStatus);
 
+  bindControlAction('service-install', 'Service install', () => window.netvanApi.installService());
+  bindControlAction('service-uninstall', 'Service uninstall', () => window.netvanApi.uninstallService());
   bindControlAction('service-start', 'Service start', () => window.netvanApi.startService());
   bindControlAction('service-stop', 'Service stop', () => window.netvanApi.stopService());
   bindControlAction('service-restart', 'Service restart', () => window.netvanApi.restartService());
@@ -360,24 +670,21 @@ async function bindControlAction(elementId, label, action) {
 
 async function refreshServiceStatus() {
   const serviceEl = document.getElementById('service-output');
-
   serviceEl.textContent = 'Loading…';
 
   const service = await window.netvanApi.getServiceStatus();
-
   serviceEl.textContent = stripAnsi(
     service.stdout || service.stderr || (service.ok ? 'OK' : 'Failed to get service status')
   );
 }
 
 function bindSettingsControls() {
-  const controls = [
+  const guiControls = [
     { id: 'setting-launch-startup', key: 'launchAtStartup' },
     { id: 'setting-close-tray', key: 'closeToTray' },
-    { id: 'setting-notifications', key: 'notificationsEnabled' },
   ];
 
-  controls.forEach(({ id, key }) => {
+  guiControls.forEach(({ id, key }) => {
     document.getElementById(id).addEventListener('change', async (event) => {
       try {
         await window.netvanApi.setSettings({ [key]: event.target.checked });
@@ -388,14 +695,27 @@ function bindSettingsControls() {
       }
     });
   });
+
+  document.getElementById('setting-disable-vpn').addEventListener('change', async (event) => {
+    try {
+      await window.netvanApi.setConfig({ disableVpnTracking: event.target.checked });
+      showToast('Collection settings saved');
+    } catch (err) {
+      showToast(err.message, true);
+      await loadSettings();
+    }
+  });
 }
 
 async function loadSettings() {
   try {
-    const settings = await window.netvanApi.getSettings();
+    const [settings, cfg] = await Promise.all([
+      window.netvanApi.getSettings(),
+      window.netvanApi.getConfig(),
+    ]);
     document.getElementById('setting-launch-startup').checked = settings.launchAtStartup;
     document.getElementById('setting-close-tray').checked = settings.closeToTray;
-    document.getElementById('setting-notifications').checked = settings.notificationsEnabled;
+    document.getElementById('setting-disable-vpn').checked = Boolean(cfg.disableVpnTracking);
   } catch (err) {
     showToast(err.message, true);
   }
@@ -424,9 +744,9 @@ async function loadAbout() {
       ['Applications', info.distinctAppCount.toLocaleString()],
       ['First', formatLocal(info.firstMinuteUtc)],
       ['Last', formatLocal(info.lastMinuteUtc)],
-      ['Sampling interval', `${cfg.samplingInterval}s`],
       ['Retention', `${cfg.retentionDays} days`],
       ['Max DB size', `${cfg.maxSizeMb} MB`],
+      ['VPN tracking', cfg.disableVpnTracking ? 'Disabled' : 'Enabled'],
     ];
 
     el.innerHTML = rows.map(([key, value]) => `

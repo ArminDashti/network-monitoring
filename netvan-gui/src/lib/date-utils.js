@@ -8,13 +8,11 @@ function alignBucketEndUtc(date) {
 }
 
 function formatBucketUtc(date) {
-  const aligned = alignBucketEndUtc(date);
-  const iso = aligned.toISOString().replace(/\.\d{3}Z$/, 'Z');
-  return iso.replace(/(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})Z$/, '$1Z');
+  return toUtcIso(alignBucketEndUtc(date));
 }
 
 function toUtcIso(localDate) {
-  return localDate.toISOString();
+  return localDate.toISOString().replace(/\.\d{3}Z$/, 'Z');
 }
 
 function startOfDayLocal(now) {
@@ -51,12 +49,35 @@ function parseCompactDateTime(raw, fallback) {
   return new Date(year, month, day, hour, minute, 0, 0);
 }
 
+function parseDateTimeLocal(raw, fallback) {
+  if (!raw || !String(raw).trim()) return fallback;
+  const text = String(raw).trim();
+
+  const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})$/);
+  if (isoMatch) {
+    return new Date(
+      Number(isoMatch[1]),
+      Number(isoMatch[2]) - 1,
+      Number(isoMatch[3]),
+      Number(isoMatch[4]),
+      Number(isoMatch[5]),
+      0,
+      0,
+    );
+  }
+
+  return parseCompactDateTime(raw, fallback);
+}
+
 function resolveRangeUtc(fromRaw, toRaw) {
   const now = new Date();
-  let fromLocal = parseCompactDateTime(fromRaw, startOfDayLocal(now));
-  let toLocal = parseCompactDateTime(toRaw, now);
+  let fromLocal = parseDateTimeLocal(fromRaw, startOfDayLocal(now));
+  let toLocal = parseDateTimeLocal(toRaw, now);
   if (toLocal < fromLocal) [fromLocal, toLocal] = [toLocal, fromLocal];
-  return { fromUtc: toUtcIso(fromLocal), toUtc: toUtcIso(toLocal) };
+  return {
+    fromUtc: toUtcIso(fromLocal),
+    toUtc: formatBucketUtc(toLocal),
+  };
 }
 
 function normalizeAppName(appName) {
@@ -73,6 +94,7 @@ module.exports = {
   startOfWeekSaturdayLocal,
   startOfMonthLocal,
   parseCompactDateTime,
+  parseDateTimeLocal,
   resolveRangeUtc,
   normalizeAppName,
 };

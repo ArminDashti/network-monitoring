@@ -8,8 +8,7 @@ namespace Netvan.Storage;
 internal sealed class NetvanConfig
 {
     public string DatabasePath { get; init; } = "";
-    public bool MonitoringEnabled { get; init; } = true;
-    public int SamplingIntervalSeconds { get; init; } = 1;
+    public bool DisableVpnTracking { get; init; }
     public int MaxSizeMb { get; init; } = 500;
     public int RetentionDays { get; init; } = 30;
     public string LogLevel { get; init; } = "Info";
@@ -65,8 +64,7 @@ internal sealed class NetvanConfig
             config = new NetvanConfig
             {
                 DatabasePath = string.IsNullOrWhiteSpace(databasePath) ? config.DatabasePath : databasePath,
-                MonitoringEnabled = config.MonitoringEnabled,
-                SamplingIntervalSeconds = config.SamplingIntervalSeconds,
+                DisableVpnTracking = config.DisableVpnTracking,
                 MaxSizeMb = config.MaxSizeMb,
                 RetentionDays = config.RetentionDays,
                 LogLevel = config.LogLevel,
@@ -90,12 +88,11 @@ internal sealed class NetvanConfig
         }
     }
 
-    public NetvanConfig WithCollectionSettings(string databasePath, int samplingIntervalSeconds) =>
+    public NetvanConfig WithCollectionSettings(string databasePath) =>
         new()
         {
             DatabasePath = databasePath,
-            SamplingIntervalSeconds = Math.Max(1, samplingIntervalSeconds),
-            MonitoringEnabled = MonitoringEnabled,
+            DisableVpnTracking = DisableVpnTracking,
             MaxSizeMb = MaxSizeMb,
             RetentionDays = RetentionDays,
             LogLevel = LogLevel,
@@ -107,8 +104,7 @@ internal sealed class NetvanConfig
         new()
         {
             DatabasePath = DatabasePath,
-            MonitoringEnabled = MonitoringEnabled,
-            SamplingIntervalSeconds = SamplingIntervalSeconds,
+            DisableVpnTracking = DisableVpnTracking,
             MaxSizeMb = MaxSizeMb,
             RetentionDays = RetentionDays,
             LogLevel = LogLevel,
@@ -121,8 +117,7 @@ internal sealed class NetvanConfig
         return new NetvanConfig
         {
             DatabasePath = Path.Combine(NetvanPaths.Home, "traffic.db"),
-            MonitoringEnabled = true,
-            SamplingIntervalSeconds = 1,
+            DisableVpnTracking = false,
             MaxSizeMb = 500,
             RetentionDays = 30,
             LogLevel = "Info",
@@ -141,10 +136,8 @@ internal sealed class NetvanConfig
         sb.AppendLine();
         sb.AppendLine("# Monitoring settings");
         sb.AppendLine("[monitoring]");
-        sb.AppendLine("# Enable/disable monitoring");
-        sb.AppendLine($"enabled = {TomlBool(MonitoringEnabled)}");
-        sb.AppendLine("# Sampling interval in seconds");
-        sb.AppendLine($"sampling_interval = {SamplingIntervalSeconds}");
+        sb.AppendLine("# Exclude traffic over VPN network adapters");
+        sb.AppendLine($"disable_vpn_tracking = {TomlBool(DisableVpnTracking)}");
         sb.AppendLine();
         sb.AppendLine("# Storage settings");
         sb.AppendLine("[storage]");
@@ -203,8 +196,7 @@ internal sealed class NetvanConfig
         return new NetvanConfig
         {
             DatabasePath = Get(values, "database_path", defaults.DatabasePath),
-            MonitoringEnabled = GetBool(values, "monitoring.enabled", defaults.MonitoringEnabled),
-            SamplingIntervalSeconds = Math.Max(1, GetInt(values, "monitoring.sampling_interval", defaults.SamplingIntervalSeconds)),
+            DisableVpnTracking = GetBool(values, "monitoring.disable_vpn_tracking", defaults.DisableVpnTracking),
             MaxSizeMb = Math.Max(1, GetInt(values, "storage.max_size_mb", defaults.MaxSizeMb)),
             RetentionDays = Math.Max(1, GetInt(values, "storage.retention_days", defaults.RetentionDays)),
             LogLevel = Get(values, "logging.level", defaults.LogLevel),

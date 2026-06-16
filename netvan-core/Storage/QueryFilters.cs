@@ -1,7 +1,6 @@
 using System.Net;
 using System.Net.Sockets;
 using Microsoft.Data.Sqlite;
-using Netvan.Cli;
 
 namespace Netvan.Storage;
 
@@ -23,10 +22,6 @@ internal static class QueryFilters
         AND remote_ip NOT GLOB '172.1[6-9].*'
         AND remote_ip NOT GLOB '172.2[0-9].*'
         AND remote_ip NOT GLOB '172.3[0-1].*'
-        AND remote_ip NOT GLOB 'fe80:*'
-        AND remote_ip NOT GLOB 'fc*:*'
-        AND remote_ip NOT GLOB 'fd*:*'
-        AND remote_ip NOT IN ('::1', '0:0:0:0:0:0:0:1')
       )
       """;
   }
@@ -37,7 +32,7 @@ internal static class QueryFilters
     {
       UsageTargetKind.SpecificApp => "AND app_name = $target\n",
       UsageTargetKind.SpecificIp => "AND remote_ip = $target\n",
-      UsageTargetKind.SpecificHost => "AND (host_name = $target OR host_name LIKE $targetSub)\n",
+      UsageTargetKind.SpecificHost => HostMatchClause(),
       _ => "",
     };
   }
@@ -47,10 +42,32 @@ internal static class QueryFilters
     if (kind == UsageTargetKind.SpecificApp || kind == UsageTargetKind.SpecificIp)
       cmd.Parameters.AddWithValue("$target", value ?? "");
     else if (kind == UsageTargetKind.SpecificHost)
-    {
-      cmd.Parameters.AddWithValue("$target", value ?? "");
-      cmd.Parameters.AddWithValue("$targetSub", "%." + (value ?? ""));
-    }
+      AddHostMatchParameters(cmd, value);
+  }
+
+  public static string HostMatchClause(string prefix = "AND ") =>
+    $"""
+      {prefix}(
+        LOWER(host_name) = LOWER($target)
+        OR LOWER(host_name) = LOWER($targetDot)
+        OR host_name LIKE $targetSub ESCAPE '\'
+      )
+      """;
+
+  public static void AddHostMatchParameters(SqliteCommand cmd, string? filterHost)
+  {
+    var host = NormalizeHostFilter(filterHost);
+    cmd.Parameters.AddWithValue("$target", host);
+    cmd.Parameters.AddWithValue("$targetDot", host + ".");
+    cmd.Parameters.AddWithValue("$targetSub", "%." + host);
+  }
+
+  private static string NormalizeHostFilter(string? value)
+  {
+    if (string.IsNullOrWhiteSpace(value))
+      return "";
+
+    return value.Trim().TrimEnd('.');
   }
 
   public static bool IsPrivateRemoteIp(string remoteIp)
@@ -61,25 +78,20 @@ internal static class QueryFilters
     if (IPAddress.IsLoopback(address))
       return true;
 
-    if (address.AddressFamily == AddressFamily.InterNetwork)
-    {
-      var bytes = address.GetAddressBytes();
-      if (bytes[0] == 10)
-        return true;
-      if (bytes[0] == 127)
-        return true;
-      if (bytes[0] == 192 && bytes[1] == 168)
-        return true;
-      if (bytes[0] == 169 && bytes[1] == 254)
-        return true;
-      if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
-        return true;
+    if (address.AddressFamily != AddressFamily.InterNetwork)
       return false;
-    }
 
-    if (address.IsIPv6LinkLocal || address.IsIPv6UniqueLocal)
+    var bytes = address.GetAddressBytes();
+    if (bytes[0] == 10)
       return true;
-
-    return address.Equals(IPAddress.IPv6Loopback);
+    if (bytes[0] == 127)
+      return true;
+    if (bytes[0] == 192 && bytes[1] == 168)
+      return true;
+    if (bytes[0] == 169 && bytes[1] == 254)
+      return true;
+    if (bytes[0] == 172 && bytes[1] >= 16 && bytes[1] <= 31)
+      return true;
+    return false;
   }
 }

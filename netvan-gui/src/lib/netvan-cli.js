@@ -70,21 +70,26 @@ async function restartService() {
   return startService();
 }
 
-async function resetData() {
-  return runNetvan(['reset'], { timeout: 90000 });
+async function installService() {
+  return runNetvan(['service', 'install'], { timeout: 60000 });
 }
 
-async function getInfo(dbPath) {
-  return runNetvan(['info', '--db', dbPath]);
+async function uninstallService() {
+  return runNetvan(['service', 'uninstall'], { timeout: 60000 });
+}
+
+async function resetData() {
+  return runNetvan(['reset'], { timeout: 90000 });
 }
 
 module.exports = {
   findNetvanExecutable,
   runNetvan,
   getServiceStatus,
+  installService,
+  uninstallService,
   startService,
   stopService,
   restartService,
   resetData,
-  getInfo,
 };

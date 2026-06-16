@@ -7,26 +7,25 @@
 
 ## Commands
 - Collection runs only via the Windows service: `netvan service install` / `start`.
-- `netvan info`, `netvan usage`, `netvan apps list`, `netvan rt` — query SQLite.
+- `netvan` (no args) launches the GUI; `netvan reset` clears the database.
 - `netvan-core\export.ps1` stops Netvan service, wipes install dir, publishes, sets PATH/NETVAN_HOME, then installs/starts service when elevated; `-SkipService` for binaries only.
 
 ## Build
-- Target frameworks: `net9.0` (portable queries) and `net9.0-windows` (TCP collection).
-- Build Windows CLI: `dotnet build netvan-core/Netvan.csproj -c Release -f net9.0-windows`
+- Target framework: `net9.0-windows` (TCP collection).
+- Build: `dotnet build netvan-core/Netvan.csproj -c Release`
 - `netvan-core\export.ps1` always `dotnet publish`s from the local repo into `.\netvan` (no GitHub release download).
 
 ## Windows APIs
-- IPv6 TCP table APIs are optional (skipped when exports missing from `iphlpapi.dll`).
 - Per-connection byte counters use `SetPerTcpConnectionEStats` + `GetPerTcpConnectionEStats` with separate Rw/Rod buffers.
 - `TCP_ESTATS_DATA_ROD_v0` must match `tcpestats.h` exactly (e.g. `SegsOut`/`SegsIn` are `ULONG64`, not `ULONG`). Wrong layout → `GetPerTcpConnectionEStats` error 1784 and zero rows.
 - Collector uses `HostNameCache.GetHostLabelFast` in the hot path (IP fallback); blocking reverse DNS per connection each poll made collection appear stuck.
-- `NETVAN_DEBUG=1` on `netvan info` prints eStats diagnostics via `IpHelperApi.PrintStatsDiagnostics()`.
-- If `info` stays at 0 rows, ensure the Netvan service is running (`netvan service status`).
+- `NETVAN_DEBUG=1` enables eStats diagnostics in collector logs via `IpHelperApi.PrintStatsDiagnostics()`.
+- If the database stays at 0 rows, ensure the Netvan service is running (`netvan service status`).
 
 ## SQL
 - Avoid `$"""` interpolated raw strings for SQL fragments containing `$parameter` names — use `StringBuilder` or non-interpolated strings.
 - Private IP filtering uses `LIKE` patterns in `QueryFilters.PrivateIpExcludeClause`.
 - Storage buckets are **1 second** (`TrafficStore.BucketIntervalSeconds`); column is still `minute_utc` for schema compatibility. Keys use `yyyy-MM-ddTHH:mm:ssZ`. Sampling interval defaults to 1s so each sample maps to one bucket.
 - First sight of a TCP connection records a baseline only (no bytes written until the next sample).
-- Per-socket tracking key includes local port; IPv4 skips rows without eStats (same as IPv6) and only counts ESTABLISHED sockets.
+- Per-socket tracking key includes local port; IPv4 skips rows without eStats and only counts ESTABLISHED sockets.
 
