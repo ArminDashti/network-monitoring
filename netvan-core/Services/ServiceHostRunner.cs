@@ -8,25 +8,12 @@ namespace Netvan.Services;
 
 internal static class ServiceHostRunner
 {
-    public static async Task<int> RunAsync(string[] args)
+    public static async Task<int> RunAsync()
     {
         SettingsManager.Initialize();
 
-        var dbPath = DefaultDbPath;
-
-        for (var i = 0; i < args.Length; i++)
-        {
-            if (args[i] is "--db" or "-d" && i + 1 < args.Length)
-            {
-                dbPath = args[++i];
-                continue;
-            }
-
-        }
-
-        var config = NetvanConfig.Load().WithCollectionSettings(dbPath);
-
-        var host = Host.CreateApplicationBuilder(args);
+        var config = NetvanConfig.Load();
+        var host = Host.CreateApplicationBuilder();
         host.Services.AddWindowsService(options => options.ServiceName = WindowsServiceManager.ServiceName);
         host.Services.AddSingleton(config);
         host.Services.AddHostedService<CollectorHostedService>();
@@ -37,7 +24,5 @@ internal static class ServiceHostRunner
         await host.Build().RunAsync();
         return 0;
     }
-
-    private static string DefaultDbPath => SettingsManager.GetDefaultDatabasePath();
 }
 #endif

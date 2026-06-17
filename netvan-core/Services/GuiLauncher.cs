@@ -33,12 +33,12 @@ internal static class GuiLauncher
       }
       catch (Exception ex)
       {
-        ConsoleOutput.WriteError($"Failed to start GUI ({target.ExePath}): {ex.Message}");
+        Console.Error.WriteLine($"Error: Failed to start GUI ({target.ExePath}): {ex.Message}");
         return 1;
       }
     }
 
-    ConsoleOutput.WriteError(
+    Console.Error.WriteLine(
       "Netvan GUI not found. Re-run export.ps1 to build and install the GUI.");
     return 1;
   }

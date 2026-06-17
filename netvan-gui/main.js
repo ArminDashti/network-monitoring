@@ -13,15 +13,6 @@ const { loadConfig, resolveHome, saveConfigPatch } = require('./src/lib/paths');
 const { loadGuiSettings, saveGuiSettings } = require('./src/lib/gui-settings');
 const { openStore } = require('./src/lib/traffic-store');
 const { resolveRangeUtc } = require('./src/lib/date-utils');
-const {
-  getServiceStatus,
-  installService,
-  uninstallService,
-  startService,
-  stopService,
-  restartService,
-  resetData,
-} = require('./src/lib/netvan-cli');
 
 process.env.NETVAN_HOME = process.env.NETVAN_HOME || resolveHome();
 
@@ -36,7 +27,6 @@ let config = null;
 let guiSettings = loadGuiSettings();
 let appIsQuitting = false;
 let storeOperations = 0;
-let storeBlocked = false;
 
 const TRAY_ICON = nativeImage.createFromDataURL(
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAKUlEQVQ4T2P8z8BQz0BFwQgGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGBgYGAJh8AAD//wMA'
@@ -150,10 +140,6 @@ function applyGuiSettings() {
 }
 
 function withStore(fn) {
-  if (storeBlocked) {
-    return { error: 'Database temporarily unavailable', config: loadConfig() };
-  }
-
   config = loadConfig();
   storeOperations += 1;
   let store;
@@ -165,30 +151,6 @@ function withStore(fn) {
   } finally {
     if (store) store.close();
     storeOperations -= 1;
-  }
-}
-
-function waitForStoreIdle(timeoutMs = 5000) {
-  const started = Date.now();
-  return new Promise((resolve) => {
-    const check = () => {
-      if (storeOperations === 0 || Date.now() - started >= timeoutMs) {
-        resolve(storeOperations === 0);
-        return;
-      }
-      setTimeout(check, 50);
-    };
-    check();
-  });
-}
-
-async function resetDatabaseSafely() {
-  storeBlocked = true;
-  await waitForStoreIdle();
-  try {
-    return await resetData();
-  } finally {
-    storeBlocked = false;
   }
 }
 
@@ -264,14 +226,6 @@ function registerIpc() {
     const { fromUtc, toUtc } = resolveRangeUtc(fromRaw, toRaw);
     return store.usageTimeSeries(fromUtc, toUtc, 1, includePrivate);
   }));
-
-  ipcMain.handle('netvan:service-status', () => getServiceStatus());
-  ipcMain.handle('netvan:service-install', () => installService());
-  ipcMain.handle('netvan:service-uninstall', () => uninstallService());
-  ipcMain.handle('netvan:service-start', () => startService());
-  ipcMain.handle('netvan:service-stop', () => stopService());
-  ipcMain.handle('netvan:service-restart', () => restartService());
-  ipcMain.handle('netvan:reset', () => resetDatabaseSafely());
 
   ipcMain.handle('window:minimize', () => mainWindow?.minimize());
   ipcMain.handle('window:maximize', () => {

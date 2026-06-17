@@ -118,6 +118,7 @@ let liveRows = [];
 let liveHistory = [];
 let liveAppHistory = new Map();
 let liveChartsBound = false;
+const VALID_VIEWS = new Set(['live', 'usage', 'apps', 'settings', 'about']);
 
 const liveCharts = {
   main: { canvas: null, ctx: null, empty: null, updated: null },
@@ -128,11 +129,11 @@ async function init() {
   bindWindowControls();
   bindNavigation();
   bindUsageQuery();
-  bindServiceControls();
   bindAppsFilter();
   bindSettingsControls();
   bindLiveCharts();
   initUsageDateDefaults();
+  normalizeViewState();
 
   try {
     config = await window.netvanApi.getConfig();
@@ -147,6 +148,31 @@ async function init() {
   await loadAbout();
 }
 
+function normalizeViewState() {
+  const activeSection = document.querySelector('.view.view-active');
+  const activeView = activeSection?.id?.replace('view-', '');
+  const initialView = VALID_VIEWS.has(activeView) ? activeView : 'live';
+  applyViewState(initialView);
+}
+
+function applyViewState(view) {
+  const nextView = VALID_VIEWS.has(view) ? view : 'live';
+  currentView = nextView;
+
+  document.querySelectorAll('.nav-item').forEach((btn) => {
+    btn.classList.toggle('active', btn.dataset.view === nextView);
+  });
+
+  document.querySelectorAll('.view').forEach((section) => {
+    section.classList.remove('view-active');
+  });
+
+  const targetSection = document.getElementById(`view-${nextView}`);
+  if (targetSection) {
+    targetSection.classList.add('view-active');
+  }
+}
+
 function bindWindowControls() {
   document.getElementById('btn-minimize').addEventListener('click', () => window.netvanApi.minimize());
   document.getElementById('btn-maximize').addEventListener('click', () => window.netvanApi.maximize());
@@ -157,19 +183,10 @@ function bindNavigation() {
   document.querySelectorAll('.nav-item').forEach((btn) => {
     btn.addEventListener('click', async () => {
       const view = btn.dataset.view;
-      if (view === currentView) return;
+      if (!VALID_VIEWS.has(view) || view === currentView) return;
+      applyViewState(view);
 
-      document.querySelectorAll('.nav-item').forEach((b) => b.classList.remove('active'));
-      btn.classList.add('active');
-
-      document.querySelectorAll('.view').forEach((v) => v.classList.remove('view-active'));
-      document.getElementById(`view-${view}`).classList.add('view-active');
-      currentView = view;
-
-      if (view === 'settings') {
-        await loadSettings();
-        await refreshServiceStatus();
-      }
+      if (view === 'settings') await loadSettings();
       if (view === 'about') await loadAbout();
       if (view === 'apps') await loadApps(document.getElementById('apps-filter').value);
       if (view === 'live') {
@@ -632,52 +649,6 @@ async function loadApps(filter) {
   }
 }
 
-function bindServiceControls() {
-  document.getElementById('service-refresh').addEventListener('click', refreshServiceStatus);
-
-  bindControlAction('service-install', 'Service install', () => window.netvanApi.installService());
-  bindControlAction('service-uninstall', 'Service uninstall', () => window.netvanApi.uninstallService());
-  bindControlAction('service-start', 'Service start', () => window.netvanApi.startService());
-  bindControlAction('service-stop', 'Service stop', () => window.netvanApi.stopService());
-  bindControlAction('service-restart', 'Service restart', () => window.netvanApi.restartService());
-
-  document.getElementById('data-reset').addEventListener('click', async () => {
-    const confirmed = window.confirm(
-      'Delete all traffic data and restart the Windows service if it is running?\n\nThis cannot be undone.'
-    );
-    if (!confirmed) return;
-
-    const result = await window.netvanApi.resetData();
-    const message = stripAnsi(result.stderr || result.stdout)
-      || (result.ok ? 'Database reset complete' : 'Reset failed');
-    showToast(message, !result.ok);
-    await refreshServiceStatus();
-    if (currentView === 'live') await refreshLive();
-    if (currentView === 'about') await loadAbout();
-  });
-}
-
-async function bindControlAction(elementId, label, action) {
-  document.getElementById(elementId).addEventListener('click', async () => {
-    const result = await action();
-    const message = stripAnsi(result.stderr || result.stdout)
-      || (result.ok ? `${label} requested` : `${label} failed`);
-    showToast(message, !result.ok);
-    await refreshServiceStatus();
-    if (currentView === 'live') await refreshLive();
-  });
-}
-
-async function refreshServiceStatus() {
-  const serviceEl = document.getElementById('service-output');
-  serviceEl.textContent = 'Loading…';
-
-  const service = await window.netvanApi.getServiceStatus();
-  serviceEl.textContent = stripAnsi(
-    service.stdout || service.stderr || (service.ok ? 'OK' : 'Failed to get service status')
-  );
-}
-
 function bindSettingsControls() {
   const guiControls = [
     { id: 'setting-launch-startup', key: 'launchAtStartup' },
@@ -705,6 +676,7 @@ function bindSettingsControls() {
       await loadSettings();
     }
   });
+
 }
 
 async function loadSettings() {

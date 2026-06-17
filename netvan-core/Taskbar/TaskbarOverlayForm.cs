@@ -1,3 +1,4 @@
+using System.Drawing.Drawing2D;
 using Netvan.Storage;
 
 namespace Netvan.Taskbar;
@@ -6,12 +7,13 @@ internal sealed class TaskbarOverlayForm : Form
 {
   private static readonly Color UploadColor = Color.FromArgb(255, 220, 60);
   private static readonly Color DownloadColor = Color.FromArgb(255, 150, 40);
-  private static readonly Color TransparentKey = Color.FromArgb(255, 0, 255);
+  private static readonly Color BackgroundColor = Color.FromArgb(28, 28, 30);
 
   private readonly System.Windows.Forms.Timer _refreshTimer;
   private readonly System.Windows.Forms.Timer _positionTimer;
   private readonly string _databasePath;
   private readonly Font _speedFont;
+  private bool _attachedToTaskbar;
   private long _uploadBytesPerSecond;
   private long _downloadBytesPerSecond;
 
@@ -19,16 +21,16 @@ internal sealed class TaskbarOverlayForm : Form
   {
     _databasePath = NetvanConfig.Load().ResolvedDatabasePath;
 
-    _speedFont = new Font("Segoe UI", 8f, FontStyle.Regular, GraphicsUnit.Point);
+    _speedFont = new Font("Segoe UI", 8.25f, FontStyle.Regular, GraphicsUnit.Point);
 
     FormBorderStyle = FormBorderStyle.None;
     ShowInTaskbar = false;
     StartPosition = FormStartPosition.Manual;
     TopMost = true;
-    BackColor = TransparentKey;
-    TransparencyKey = TransparentKey;
-    ClientSize = new Size(72, 36);
+    BackColor = BackgroundColor;
+    ClientSize = new Size(86, 34);
     Text = "Netvan";
+    DoubleBuffered = true;
 
     _refreshTimer = new System.Windows.Forms.Timer { Interval = 1000 };
     _refreshTimer.Tick += (_, _) => RefreshSpeeds();
@@ -40,6 +42,10 @@ internal sealed class TaskbarOverlayForm : Form
 
     Load += (_, _) =>
     {
+      _attachedToTaskbar = TaskbarNative.TryAttachToTaskbar(Handle);
+      if (_attachedToTaskbar)
+        TopMost = false;
+
       Reposition();
       RefreshSpeeds();
       TaskbarWidgetManager.WriteState(new TaskbarState(Environment.ProcessId, DateTime.UtcNow));
@@ -69,27 +75,39 @@ internal sealed class TaskbarOverlayForm : Form
   {
     base.OnPaint(e);
 
-    e.Graphics.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.AntiAlias;
+    e.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
     e.Graphics.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
+    using var path = new GraphicsPath();
+    var bounds = new Rectangle(0, 0, Width - 1, Height - 1);
+    var radius = 6;
+    path.AddArc(bounds.Left, bounds.Top, radius, radius, 180, 90);
+    path.AddArc(bounds.Right - radius, bounds.Top, radius, radius, 270, 90);
+    path.AddArc(bounds.Right - radius, bounds.Bottom - radius, radius, radius, 0, 90);
+    path.AddArc(bounds.Left, bounds.Bottom - radius, radius, radius, 90, 90);
+    path.CloseFigure();
+
+    using (var background = new SolidBrush(BackgroundColor))
+      e.Graphics.FillPath(background, path);
+
     DrawSpeedRow(e.Graphics, y: 2, pointingUp: true, UploadColor, _uploadBytesPerSecond);
-    DrawSpeedRow(e.Graphics, y: 18, pointingUp: false, DownloadColor, _downloadBytesPerSecond);
+    DrawSpeedRow(e.Graphics, y: 17, pointingUp: false, DownloadColor, _downloadBytesPerSecond);
   }
 
   private void DrawSpeedRow(Graphics graphics, int y, bool pointingUp, Color color, long bytesPerSecond)
   {
     var triangle = new Point[]
     {
-      new(2, y + (pointingUp ? 6 : 0)),
-      new(8, y + (pointingUp ? 0 : 6)),
-      new(14, y + (pointingUp ? 6 : 0)),
+      new(6, y + (pointingUp ? 6 : 0)),
+      new(12, y + (pointingUp ? 0 : 6)),
+      new(18, y + (pointingUp ? 6 : 0)),
     };
 
     using var brush = new SolidBrush(color);
     graphics.FillPolygon(brush, triangle);
 
     var text = NetworkSpeedFormatter.FormatMegabitsPerSecond(bytesPerSecond);
-    graphics.DrawString(text, _speedFont, brush, 18, y - 1);
+    graphics.DrawString(text, _speedFont, brush, 22, y - 1);
   }
 
   private void RefreshSpeeds()
@@ -118,10 +136,14 @@ internal sealed class TaskbarOverlayForm : Form
 
   private void Reposition()
   {
-    var location = TaskbarNative.GetWidgetLocation(Width, Height);
+    var location = _attachedToTaskbar
+      ? TaskbarNative.GetWidgetLocationClient(Width, Height)
+      : TaskbarNative.GetWidgetLocationScreen(Width, Height);
+
     if (Location != location)
       Location = location;
 
-    TaskbarNative.KeepTopMost(Handle);
+    if (!_attachedToTaskbar)
+      TaskbarNative.KeepTopMost(Handle);
   }
 }

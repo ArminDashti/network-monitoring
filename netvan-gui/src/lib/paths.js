@@ -80,6 +80,7 @@ function loadConfig(home = resolveHome()) {
     logLevel: 'Info',
     logFile: path.join(home, 'netvan.log'),
     disableVpnTracking: false,
+    taskbarEnabled: false,
   };
 
   if (!fs.existsSync(configPath)) {
@@ -123,6 +124,7 @@ function loadConfig(home = resolveHome()) {
     logLevel: values['logging.level'] || defaults.logLevel,
     logFile: expandPath(values['logging.log_file'] || defaults.logFile, home),
     disableVpnTracking: parseTomlBool(values['monitoring.disable_vpn_tracking'], defaults.disableVpnTracking),
+    taskbarEnabled: parseTomlBool(values['taskbar.enabled'], defaults.taskbarEnabled),
   };
 }
 

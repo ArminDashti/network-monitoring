@@ -31,6 +31,257 @@ if (-not $InstallDir) {
 }
 $InstallDir = [System.IO.Path]::GetFullPath($InstallDir)
 
+function Stop-ProcessTree {
+    param([int]$ProcessId)
+
+    if ($ProcessId -le 0) {
+        return
+    }
+
+    Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+    $null = & taskkill.exe /F /PID $ProcessId /T 2>&1
+}
+
+function Test-CommandLineReferencesPath {
+    param(
+        [string]$CommandLine,
+        [string]$Path
+    )
+
+    if ([string]::IsNullOrWhiteSpace($CommandLine) -or [string]::IsNullOrWhiteSpace($Path)) {
+        return $false
+    }
+
+    $resolvedPath = [System.IO.Path]::GetFullPath($Path).TrimEnd('\')
+    $index = 0
+
+    while (($index = $CommandLine.IndexOf($resolvedPath, $index, [System.StringComparison]::OrdinalIgnoreCase)) -ge 0) {
+        $afterIndex = $index + $resolvedPath.Length
+        if ($afterIndex -ge $CommandLine.Length) {
+            return $true
+        }
+
+        $nextChar = $CommandLine[$afterIndex]
+        if ($nextChar -in @('\', '"', "'", ' ', ';', ',', ')')) {
+            return $true
+        }
+
+        $index++
+    }
+
+    return $false
+}
+
+function Stop-ProcessesUsingPath {
+    param([string]$Path)
+
+    if ([string]::IsNullOrWhiteSpace($Path)) {
+        return
+    }
+
+    $resolvedPath = [System.IO.Path]::GetFullPath($Path)
+    $resolvedDirectory = if ((Test-Path $Path) -and -not (Test-Path $Path -PathType Leaf)) {
+        $resolvedPath.TrimEnd('\')
+    }
+    elseif (Test-Path $Path) {
+        [System.IO.Path]::GetDirectoryName($resolvedPath).TrimEnd('\')
+    }
+    else {
+        $resolvedPath.TrimEnd('\')
+    }
+
+    $fileNameNeedle = [System.IO.Path]::GetFileName($resolvedPath).ToLowerInvariant()
+    $currentProcessId = $PID
+
+    foreach ($proc in @(Get-CimInstance Win32_Process -ErrorAction SilentlyContinue)) {
+        if ($proc.ProcessId -eq $currentProcessId) {
+            continue
+        }
+
+        $shouldStop = $false
+
+        if ($proc.ExecutablePath) {
+            try {
+                $executablePath = [System.IO.Path]::GetFullPath($proc.ExecutablePath)
+                if ($executablePath.StartsWith("$resolvedDirectory\", [System.StringComparison]::OrdinalIgnoreCase)) {
+                    $shouldStop = $true
+                }
+            }
+            catch {
+                $shouldStop = $false
+            }
+        }
+
+        if (-not $shouldStop -and $proc.CommandLine) {
+            if (Test-CommandLineReferencesPath -CommandLine $proc.CommandLine -Path $resolvedPath) {
+                $shouldStop = $true
+            }
+            elseif ((Test-Path $Path -PathType Leaf) -and $fileNameNeedle) {
+                $commandLine = $proc.CommandLine.ToLowerInvariant()
+                if ($commandLine.Contains($fileNameNeedle) -and
+                    (Test-CommandLineReferencesPath -CommandLine $proc.CommandLine -Path $resolvedDirectory)) {
+                    $shouldStop = $true
+                }
+            }
+        }
+
+        if ($shouldStop) {
+            Write-Info "Stopping $($proc.Name) (PID $($proc.ProcessId)) using $resolvedPath..."
+            Stop-ProcessTree -ProcessId $proc.ProcessId
+        }
+    }
+}
+
+function Stop-NetvanTaskbarProcesses {
+    param([string]$InstallDirectory)
+
+    $netvanExe = Join-Path $InstallDirectory "netvan.exe"
+    if (Test-Path $netvanExe) {
+        & $netvanExe taskbar disable 2>&1 | Out-Null
+    }
+
+    $pidFile = Join-Path $InstallDirectory "taskbar.pid"
+    if (-not (Test-Path $pidFile)) {
+        return
+    }
+
+    try {
+        $state = Get-Content -Path $pidFile -Raw | ConvertFrom-Json
+        if ($state.ProcessId) {
+            $taskbarPid = [int]$state.ProcessId
+            if (Get-Process -Id $taskbarPid -ErrorAction SilentlyContinue) {
+                Write-Info "Stopping taskbar widget (PID $taskbarPid)..."
+                Stop-ProcessTree -ProcessId $taskbarPid
+            }
+        }
+    }
+    catch {
+        # Ignore malformed taskbar state files.
+    }
+}
+
+function Stop-NetvanProcessesByName {
+    foreach ($processName in @("netvan", "netm", "Netvan")) {
+        foreach ($proc in @(Get-Process -Name $processName -ErrorAction SilentlyContinue)) {
+            Write-Info "Stopping $($proc.ProcessName) (PID $($proc.Id))..."
+            Stop-ProcessTree -ProcessId $proc.Id
+        }
+    }
+}
+
+function Stop-NetvanNodeProcesses {
+    param([string]$GuiSourceDirectory)
+
+    $needles = @("netvan-gui", "netvan\gui", "netvan/gui")
+    if ($GuiSourceDirectory) {
+        $needles += [System.IO.Path]::GetFullPath($GuiSourceDirectory).ToLowerInvariant()
+    }
+
+    foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name = 'node.exe'" -ErrorAction SilentlyContinue)) {
+        if (-not $proc.CommandLine) {
+            continue
+        }
+
+        $commandLine = $proc.CommandLine.ToLowerInvariant()
+        $shouldStop = $false
+        foreach ($needle in $needles) {
+            if ($commandLine.Contains($needle.ToLowerInvariant())) {
+                $shouldStop = $true
+                break
+            }
+        }
+
+        if ($shouldStop) {
+            Write-Info "Stopping node.exe (PID $($proc.ProcessId)) running Netvan GUI..."
+            Stop-ProcessTree -ProcessId $proc.ProcessId
+        }
+    }
+}
+
+function Stop-NetvanSqliteCliProcesses {
+    param([string]$InstallDirectory)
+
+    foreach ($proc in @(Get-CimInstance Win32_Process -Filter "Name = 'sqlite3.exe'" -ErrorAction SilentlyContinue)) {
+        $shouldStop = $false
+
+        if (Test-ProcessPathUnderDirectory -ProcessPath $proc.ExecutablePath -DirectoryPath $InstallDirectory) {
+            $shouldStop = $true
+        }
+        elseif ($proc.CommandLine -and $proc.CommandLine -like "*traffic.db*") {
+            $shouldStop = $true
+        }
+
+        if ($shouldStop) {
+            Write-Info "Stopping sqlite3.exe (PID $($proc.ProcessId))..."
+            Stop-ProcessTree -ProcessId $proc.ProcessId
+        }
+    }
+}
+
+function Invoke-NetvanExportPreflightShutdown {
+    param(
+        [string]$InstallDirectory,
+        [switch]$FailIfFilesLocked
+    )
+
+    Write-Info "Closing all Netvan processes before export..."
+
+    $repoRoot = Split-Path $PSScriptRoot -Parent
+    $guiSource = Join-Path $repoRoot "netvan-gui"
+    $guiSourceArg = if (Test-Path $guiSource) { $guiSource } else { $null }
+    $netvanExe = Join-Path $InstallDirectory "netvan.exe"
+    $trafficDb = Join-Path $InstallDirectory "traffic.db"
+
+    if (Test-NetvanServiceInstalled) {
+        $null = Stop-NetvanWindowsService -InstallDirectory $InstallDirectory -FailIfNotStopped:$FailIfFilesLocked
+    }
+
+    if (Test-Path $netvanExe) {
+        & $netvanExe taskbar disable 2>&1 | Out-Null
+        & $netvanExe stop 2>&1 | Out-Null
+        & $netvanExe service stop 2>&1 | Out-Null
+    }
+
+    Stop-NetvanTaskbarProcesses -InstallDirectory $InstallDirectory
+    Stop-NetvanProcessesByName
+    Stop-NetvanGuiProcesses -InstallDirectory $InstallDirectory -GuiSourceDirectory $guiSourceArg -StopUnscopedElectronGui
+    Stop-NetvanNodeProcesses -GuiSourceDirectory $guiSourceArg
+    Stop-NetvanSqliteCliProcesses -InstallDirectory $InstallDirectory
+    Stop-ProcessesUsingPath -Path $InstallDirectory
+
+    if (Test-Path $trafficDb) {
+        Stop-ProcessesUsingPath -Path $trafficDb
+    }
+
+    Start-Sleep -Milliseconds 750
+
+    foreach ($lockedFile in @($trafficDb, $netvanExe)) {
+        if (-not (Test-Path $lockedFile)) {
+            continue
+        }
+
+        if (Wait-ForFileUnlocked -Path $lockedFile -TimeoutSeconds 20) {
+            continue
+        }
+
+        Write-Host "[WARN] $lockedFile is still locked; forcing another shutdown pass..." -ForegroundColor Yellow
+        Stop-NetvanProcessesByName
+        Stop-NetvanGuiProcesses -InstallDirectory $InstallDirectory -GuiSourceDirectory $guiSourceArg -StopUnscopedElectronGui
+        Stop-ProcessesUsingPath -Path $InstallDirectory
+        Stop-ProcessesUsingPath -Path $trafficDb
+
+        if (Wait-ForFileUnlocked -Path $lockedFile -TimeoutSeconds 10) {
+            continue
+        }
+
+        if ($FailIfFilesLocked) {
+            Write-Error-Exit "$lockedFile is still in use. Close Netvan GUI, taskbar widget, and the Windows service, then re-run export.ps1 in an elevated PowerShell window (Run as administrator)."
+        }
+
+        Write-Host "[WARN] $lockedFile is still in use." -ForegroundColor Yellow
+    }
+}
+
 function Write-Info {
     param([string]$Message)
     Write-Host "[INFO] $Message" -ForegroundColor Cyan
@@ -256,95 +507,13 @@ function Wait-ForFileUnlocked {
     return $false
 }
 
-function Stop-NetvanProcessesInDirectory {
-    param([string]$InstallDirectory)
-
-    $netvanExe = Join-Path $InstallDirectory "netvan.exe"
-    $netmExe = Join-Path $InstallDirectory "netm.exe"
-    $resolvedExe = $null
-
-    if (Test-Path $netvanExe) {
-        $resolvedExe = [System.IO.Path]::GetFullPath($netvanExe)
-        Write-Info "Stopping netvan processes using $resolvedExe..."
-        & $resolvedExe stop 2>$null | Out-Null
-        & $resolvedExe service stop 2>$null | Out-Null
-    }
-    elseif (Test-Path $netmExe) {
-        $resolvedExe = [System.IO.Path]::GetFullPath($netmExe)
-        Write-Info "Stopping legacy netm processes using $resolvedExe..."
-    }
-    else {
-        return
-    }
-
-    $stoppedAny = $false
-    $processes = @(
-        Get-CimInstance Win32_Process -Filter "Name = 'netvan.exe'" -ErrorAction SilentlyContinue
-        Get-CimInstance Win32_Process -Filter "Name = 'netm.exe'" -ErrorAction SilentlyContinue
+function Stop-AllNetvanProcesses {
+    param(
+        [string]$InstallDirectory,
+        [switch]$FailIfNotStopped
     )
-    foreach ($proc in $processes) {
-        $shouldStop = $false
 
-        if ($proc.ExecutablePath) {
-            try {
-                $procPath = [System.IO.Path]::GetFullPath($proc.ExecutablePath)
-                $shouldStop = $procPath -ieq $resolvedExe
-            }
-            catch {
-                $shouldStop = $false
-            }
-        }
-        elseif ($proc.CommandLine -and $proc.CommandLine -like "*$resolvedExe*") {
-            $shouldStop = $true
-        }
-
-        if ($shouldStop) {
-            Write-Info "Stopping netvan.exe (PID $($proc.ProcessId))..."
-            Stop-Process -Id $proc.ProcessId -Force -ErrorAction SilentlyContinue
-            $stoppedAny = $true
-        }
-    }
-
-    foreach ($proc in @(
-            @(Get-Process -Name netvan -ErrorAction SilentlyContinue)
-            @(Get-Process -Name netm -ErrorAction SilentlyContinue)
-        )) {
-        $procPath = $null
-        try {
-            $procPath = $proc.Path
-        }
-        catch {
-            # Path is unavailable without elevation; handled by fallback below.
-        }
-
-        if ($procPath) {
-            try {
-                if ([System.IO.Path]::GetFullPath($procPath) -ieq $resolvedExe) {
-                    Write-Info "Stopping netvan.exe (PID $($proc.Id))..."
-                    Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-                    $stoppedAny = $true
-                }
-            }
-            catch {
-                continue
-            }
-        }
-    }
-
-    if (-not $stoppedAny -and (Test-Path $netvanExe) -and -not (Test-FileUnlocked -Path $netvanExe)) {
-        $running = @(Get-Process -Name netvan -ErrorAction SilentlyContinue)
-        if ($running.Count -gt 0) {
-            Write-Host "[WARN] Stopping $($running.Count) netvan process(es) so install files can be replaced..." -ForegroundColor Yellow
-            foreach ($proc in $running) {
-                Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue
-                if (Test-IsAdministrator) {
-                    $null = & taskkill.exe /F /PID $proc.Id 2>&1
-                }
-            }
-        }
-    }
-
-    Start-Sleep -Milliseconds 500
+    Invoke-NetvanExportPreflightShutdown -InstallDirectory $InstallDirectory -FailIfFilesLocked:$FailIfNotStopped
 }
 
 function Assert-CanReplaceInstallDirectory {
@@ -383,25 +552,21 @@ function Remove-NetvanServiceIfPresent {
 
     $netvanExe = Join-Path $InstallDirectory "netvan.exe"
 
+    Stop-AllNetvanProcesses -InstallDirectory $InstallDirectory -FailIfNotStopped:$FailIfServiceRemains
+
     if (Test-NetvanServiceInstalled) {
-        $null = Stop-NetvanWindowsService -InstallDirectory $InstallDirectory -FailIfNotStopped:$FailIfServiceRemains
         $null = Remove-NetvanWindowsServiceRegistration -InstallDirectory $InstallDirectory -FailIfPresent:$FailIfServiceRemains
     }
 
-    Stop-NetvanProcessesInDirectory -InstallDirectory $InstallDirectory
+    $trafficDb = Join-Path $InstallDirectory "traffic.db"
+    foreach ($lockedFile in @($netvanExe, $trafficDb)) {
+        if ((Test-Path $lockedFile) -and -not (Wait-ForFileUnlocked -Path $lockedFile -TimeoutSeconds 5)) {
+            if ($FailIfServiceRemains) {
+                Write-Error-Exit "$lockedFile is still in use. Re-run export.ps1 in an elevated PowerShell window (Run as administrator)."
+            }
 
-    $repoRoot = Split-Path $PSScriptRoot -Parent
-    $guiSource = Join-Path $repoRoot "netvan-gui"
-    if (Test-Path $guiSource) {
-        Stop-NetvanGuiProcesses -InstallDirectory $InstallDirectory -GuiSourceDirectory $guiSource
-    }
-
-    if ((Test-Path $netvanExe) -and -not (Wait-ForFileUnlocked -Path $netvanExe)) {
-        if ($FailIfServiceRemains) {
-            Write-Error-Exit "$netvanExe is still in use. Re-run export.ps1 in an elevated PowerShell window (Run as administrator)."
+            Write-Host "[WARN] $lockedFile is still in use. Re-run export.ps1 as Administrator or stop Netvan manually." -ForegroundColor Yellow
         }
-
-        Write-Host "[WARN] $netvanExe is still in use. Re-run export.ps1 as Administrator or stop Netvan manually." -ForegroundColor Yellow
     }
 }
 
@@ -413,7 +578,10 @@ function Clear-InstallDirectory {
     }
 
     $netvanExe = Join-Path $Dir "netvan.exe"
+    $trafficDb = Join-Path $Dir "traffic.db"
     $maxAttempts = 5
+
+    Stop-AllNetvanProcesses -InstallDirectory $Dir
 
     Write-Info "Deleting all files in $Dir..."
     for ($attempt = 1; $attempt -le $maxAttempts; $attempt++) {
@@ -424,14 +592,17 @@ function Clear-InstallDirectory {
         }
         catch {
             if ($attempt -eq $maxAttempts) {
+                Invoke-NetvanExportPreflightShutdown -InstallDirectory $Dir -FailIfFilesLocked
                 Assert-CanReplaceInstallDirectory -InstallDirectory $Dir
                 throw
             }
 
             Write-Host "[WARN] Could not delete all files (attempt $attempt/$maxAttempts): $($_.Exception.Message)" -ForegroundColor Yellow
-            Stop-NetvanProcessesInDirectory -InstallDirectory $Dir
-            if (Test-Path $netvanExe) {
-                $null = Wait-ForFileUnlocked -Path $netvanExe -TimeoutSeconds 5
+            Invoke-NetvanExportPreflightShutdown -InstallDirectory $Dir
+            foreach ($lockedFile in @($trafficDb, $netvanExe)) {
+                if (Test-Path $lockedFile) {
+                    $null = Wait-ForFileUnlocked -Path $lockedFile -TimeoutSeconds 10
+                }
             }
 
             Start-Sleep -Seconds 1
@@ -594,7 +765,7 @@ function Stop-NetvanGuiProcesses {
     }
     if ($GuiSourceDirectory) {
         $scopedDirectories += $GuiSourceDirectory
-        $scopedDirectories += (Join-Path $GuiSourceDirectory "dist" "win-unpacked")
+        $scopedDirectories += (Join-Path (Join-Path $GuiSourceDirectory "dist") "win-unpacked")
     }
 
     foreach ($proc in @(Get-Process -Name Netvan -ErrorAction SilentlyContinue)) {
@@ -671,7 +842,7 @@ function Clear-GuiBuildOutput {
         return
     }
 
-    $appAsar = Join-Path $outputDir "win-unpacked" "resources" "app.asar"
+    $appAsar = Join-Path (Join-Path (Join-Path $outputDir "win-unpacked") "resources") "app.asar"
     Write-Info "Clearing previous GUI build output..."
 
     for ($attempt = 1; $attempt -le $MaxAttempts; $attempt++) {
@@ -739,7 +910,7 @@ function Install-NetvanGui {
         Set-Location $originalLocation
     }
 
-    $unpackedDir = Join-Path $guiSource "dist-build" "win-unpacked"
+    $unpackedDir = Join-Path (Join-Path $guiSource "dist-build") "win-unpacked"
     if (-not (Test-Path $unpackedDir)) {
         Write-Host "[WARN] GUI build output not found at $unpackedDir; skipping GUI installation." -ForegroundColor Yellow
         return
@@ -774,6 +945,8 @@ function Install-SqliteCli {
 $Arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
 Write-Info "Install directory: $InstallDir"
 Write-Info "Detected architecture: $Arch"
+
+Invoke-NetvanExportPreflightShutdown -InstallDirectory $InstallDir
 
 $isAdmin = Test-IsAdministrator
 $hasExistingInstall = (Test-Path $InstallDir) -and ((Get-ChildItem -Path $InstallDir -Force -ErrorAction SilentlyContinue | Measure-Object).Count -gt 0)
