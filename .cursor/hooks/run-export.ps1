@@ -1,4 +1,5 @@
-# Runs netvan-core/export.ps1 after the agent completes a prompt (stop hook).
+# Runs netvan-core/export.ps1 after the agent completes a prompt (stop hook),
+# then launches the Netvan GUI from the published install directory.
 # Project hooks execute with cwd at the repository root.
 
 $ErrorActionPreference = "Continue"
@@ -35,4 +36,22 @@ if ($exitCode -ne 0) {
 }
 
 Write-Host "[netvan hook] export.ps1 completed successfully" -ForegroundColor Green
+
+$installDir = [System.IO.Path]::GetFullPath((Join-Path (Split-Path $exportScript -Parent) "..\netvan"))
+$netvanExe = Join-Path $installDir "netvan.exe"
+if (-not (Test-Path $netvanExe)) {
+    Write-Host "[netvan hook] GUI not launched: netvan.exe not found at $netvanExe" -ForegroundColor Yellow
+    exit 0
+}
+
+Write-Host "[netvan hook] Launching GUI: $netvanExe" -ForegroundColor Cyan
+try {
+    Start-Process -FilePath $netvanExe -WorkingDirectory $installDir | Out-Null
+    Write-Host "[netvan hook] GUI launched" -ForegroundColor Green
+}
+catch {
+    Write-Host "[netvan hook] Failed to launch GUI: $($_.Exception.Message)" -ForegroundColor Red
+    exit 1
+}
+
 exit 0
